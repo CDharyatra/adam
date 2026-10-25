@@ -1,0 +1,9 @@
+# ninja log v5
+1	600	8067773027426161	CMakeFiles/mlc_llm_jni.dir/src/main/cpp/mlc_llm_jni.cpp.o	546c08be1573bef6
+613	927	8067773030529021	../../../../build/intermediates/cxx/Debug/111e2t2z/obj/x86_64/libmlc_llm_jni.so	c194697fc548f487
+0	22	0	clean	e47b76b713491608
+3	1226	8067779217818322	CMakeFiles/mlc_llm_jni.dir/src/main/cpp/mlc_llm_jni.cpp.o	546c08be1573bef6
+1228	1903	8067779224442322	../../../../build/intermediates/cxx/Debug/111e2t2z/obj/x86_64/libmlc_llm_jni.so	c194697fc548f487
+0	25	0	clean	e47b76b713491608
+2	599	8067780895126274	CMakeFiles/mlc_llm_jni.dir/src/main/cpp/mlc_llm_jni.cpp.o	546c08be1573bef6
+600	817	8067780897208490	../../../../build/intermediates/cxx/Debug/111e2t2z/obj/x86_64/libmlc_llm_jni.so	c194697fc548f487

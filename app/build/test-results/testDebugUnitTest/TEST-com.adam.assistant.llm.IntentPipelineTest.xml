@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.adam.assistant.llm.IntentPipelineTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-09-16T18:33:51" hostname="DESKTOP-2J2R2MG" time="0.136">
+  <properties/>
+  <testcase name="belowFloorFallsThrough" classname="com.adam.assistant.llm.IntentPipelineTest" time="0.086"/>
+  <testcase name="allMissReturnsNull" classname="com.adam.assistant.llm.IntentPipelineTest" time="0.002"/>
+  <testcase name="firstConfidentMatchWinsRegardlessOfConfidence" classname="com.adam.assistant.llm.IntentPipelineTest" time="0.002"/>
+  <testcase name="throwingStageIsSkipped" classname="com.adam.assistant.llm.IntentPipelineTest" time="0.002"/>
+  <testcase name="emptyPipelineReturnsNull" classname="com.adam.assistant.llm.IntentPipelineTest" time="0.002"/>
+  <testcase name="suspendStageIsAwaited" classname="com.adam.assistant.llm.IntentPipelineTest" time="0.041"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

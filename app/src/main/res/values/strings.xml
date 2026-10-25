@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Adam</string>
+    <string name="accessibility_service_label">Adam Assistant</string>
+    <string name="accessibility_service_description">Adam uses Accessibility Service to control apps on your behalf — all processing stays on-device.</string>
+</resources>

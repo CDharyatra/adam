@@ -1,0 +1,5 @@
+# ninja log v5
+2	486	8071457437618454	CMakeFiles/mlc_llm_jni.dir/src/main/cpp/mlc_llm_jni.cpp.o	546c08be1573bef6
+487	721	8071457439812171	../../../../build/intermediates/cxx/Debug/44c4q5t7/obj/x86_64/libmlc_llm_jni.so	1d7dc2adae5c0f72
+0	21	0	clean	e47b76b713491608
+7	615	8100895278674574	../../../../build/intermediates/cxx/Debug/44c4q5t7/obj/x86_64/libmlc_llm_jni.so	bca024525362a468

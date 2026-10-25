@@ -1,0 +1,4 @@
+-- MLC LLM not found — regex fallback will be used
+-- Configuring done
+-- Generating done
+-- Build files have been written to: C:/project adam/app/.cxx/Debug/44c4q5t7/arm64-v8a

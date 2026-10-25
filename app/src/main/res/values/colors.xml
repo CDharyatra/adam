@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Adam green-on-black palette -->
+    <color name="adam_black">#000000</color>
+    <color name="adam_bg">#060A06</color>
+    <color name="adam_surface">#0D140D</color>
+    <color name="adam_card">#111B11</color>
+    <color name="adam_green">#00E676</color>
+    <color name="adam_green_bright">#69F0AE</color>
+    <color name="adam_green_dark">#00C853</color>
+    <color name="adam_green_dim">#1B5E20</color>
+    <color name="adam_green_faint">#0A2E14</color>
+    <color name="adam_text">#E8F5E9</color>
+    <color name="adam_text_dim">#8FA598</color>
+    <color name="adam_red">#FF5252</color>
+</resources>

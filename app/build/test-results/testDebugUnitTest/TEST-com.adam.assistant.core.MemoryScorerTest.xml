@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.adam.assistant.core.MemoryScorerTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-09-16T18:33:50" hostname="DESKTOP-2J2R2MG" time="0.104">
+  <properties/>
+  <testcase name="noOverlapOrEmpty" classname="com.adam.assistant.core.MemoryScorerTest" time="0.094"/>
+  <testcase name="partialCoverage" classname="com.adam.assistant.core.MemoryScorerTest" time="0.002"/>
+  <testcase name="bestPatternWins" classname="com.adam.assistant.core.MemoryScorerTest" time="0.002"/>
+  <testcase name="fullCoverageScoresOne" classname="com.adam.assistant.core.MemoryScorerTest" time="0.0"/>
+  <testcase name="singleKeywordNeedsItsHit" classname="com.adam.assistant.core.MemoryScorerTest" time="0.001"/>
+  <testcase name="twoKeywordNeedsBoth" classname="com.adam.assistant.core.MemoryScorerTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

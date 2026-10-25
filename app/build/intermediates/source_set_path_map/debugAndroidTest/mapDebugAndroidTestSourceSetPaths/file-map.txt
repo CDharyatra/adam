@@ -1,0 +1,4 @@
+com.adam.assistant.test.app-androidTest-0 C:\project adam\app\build\generated\res\resValues\androidTest\debug
+com.adam.assistant.test.app-mergeDebugAndroidTestResources-1 C:\project adam\app\build\intermediates\incremental\debugAndroidTest\mergeDebugAndroidTestResources\merged.dir
+com.adam.assistant.test.app-mergeDebugAndroidTestResources-2 C:\project adam\app\build\intermediates\incremental\debugAndroidTest\mergeDebugAndroidTestResources\stripped.dir
+com.adam.assistant.test.app-debugAndroidTest-3 C:\project adam\app\build\intermediates\merged_res\debugAndroidTest\mergeDebugAndroidTestResources

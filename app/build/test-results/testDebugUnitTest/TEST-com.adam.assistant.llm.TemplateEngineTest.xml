@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.adam.assistant.llm.TemplateEngineTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-09-16T18:33:51" hostname="DESKTOP-2J2R2MG" time="0.039">
+  <properties/>
+  <testcase name="optionalAbsent" classname="com.adam.assistant.llm.TemplateEngineTest" time="0.029"/>
+  <testcase name="normalization" classname="com.adam.assistant.llm.TemplateEngineTest" time="0.001"/>
+  <testcase name="optionalPresent" classname="com.adam.assistant.llm.TemplateEngineTest" time="0.002"/>
+  <testcase name="alternation" classname="com.adam.assistant.llm.TemplateEngineTest" time="0.001"/>
+  <testcase name="confidenceRange" classname="com.adam.assistant.llm.TemplateEngineTest" time="0.001"/>
+  <testcase name="moreLiteralsWin" classname="com.adam.assistant.llm.TemplateEngineTest" time="0.001"/>
+  <testcase name="literalAndSlot" classname="com.adam.assistant.llm.TemplateEngineTest" time="0.0"/>
+  <testcase name="literalOnlyTemplate" classname="com.adam.assistant.llm.TemplateEngineTest" time="0.0"/>
+  <testcase name="noMatch" classname="com.adam.assistant.llm.TemplateEngineTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

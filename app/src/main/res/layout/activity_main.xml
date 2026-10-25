@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/adam_bg">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp"
+        android:gravity="center_horizontal">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="ADAM"
+            android:textSize="30sp"
+            android:textStyle="bold"
+            android:textColor="@color/adam_green"
+            android:letterSpacing="0.3"
+            android:layout_marginBottom="2dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Fully local · Fully private"
+            android:textSize="13sp"
+            android:textColor="@color/adam_text_dim"
+            android:layout_marginBottom="8dp" />
+
+        <!-- Living Siri-style orb: pulses, orbits dots, waveform bars, binary rain.
+             Appears once setup starts; dance mode follows AssistantService state. -->
+        <com.adam.assistant.ui.AdamOrbView
+            android:id="@+id/orbView"
+            android:layout_width="260dp"
+            android:layout_height="260dp"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="4dp"
+            android:contentDescription="Adam voice orb" />
+
+        <!-- Adam's talking status line — mirrors what Adam speaks aloud -->
+        <TextView
+            android:id="@+id/tvVoiceStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Hey, I'm Adam."
+            android:textSize="17sp"
+            android:textStyle="bold"
+            android:textColor="@color/adam_green_bright"
+            android:gravity="center"
+            android:layout_marginBottom="4dp" />
+
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Status: IDLE"
+            android:textSize="13sp"
+            android:textColor="@color/adam_text_dim"
+            android:layout_marginBottom="8dp" />
+
+        <TextView
+            android:id="@+id/tvLastHeard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Last heard: —"
+            android:textSize="13sp"
+            android:textColor="@color/adam_text_dim"
+            android:gravity="center"
+            android:layout_marginBottom="16dp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnStartStop"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Start Adam"
+            android:textSize="18sp"
+            app:cornerRadius="14dp"
+            app:backgroundTint="@color/adam_green"
+            android:textColor="@color/adam_black" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginTop="16dp">
+
+            <Switch
+                android:id="@+id/swWakeWord"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text='Wake word "Hey Adam"'
+                android:textSize="14sp"
+                android:textColor="@color/adam_text"
+                android:thumbTint="@color/adam_green"
+                android:trackTint="@color/adam_green_dim" />
+       </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text='When enabled, Adam listens in the background. Say "Hey Adam" to start a conversation — keep talking, no button presses needed. Disable to save battery.'
+            android:textSize="11sp"
+            android:textColor="@color/adam_text_dim"
+            android:layout_marginTop="4dp" />
+
+        <TextView
+            android:id="@+id/tvAccessibilityStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="14sp"
+            android:textColor="@color/adam_text"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="8dp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnAccessibility"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Enable Accessibility Service"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            app:strokeColor="@color/adam_green"
+            app:strokeWidth="1dp"
+            android:textColor="@color/adam_green"
+            android:layout_marginBottom="8dp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnHowToEnable"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="How to enable these permissions"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:textColor="@color/adam_green_bright"
+            android:layout_marginBottom="8dp" />
+
+        <LinearLayout
+            android:id="@+id/downloadPanel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone"
+            android:layout_marginTop="16dp"
+            android:padding="16dp"
+            android:background="@drawable/bg_download_panel">
+
+            <TextView
+                android:id="@+id/tvDownloadTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Downloading AI model…"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:textColor="@color/adam_green_bright" />
+
+            <TextView
+                android:id="@+id/tvDownloadSource"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="11sp"
+                android:textColor="@color/adam_text_dim"
+                android:layout_marginTop="2dp"
+                android:layout_marginBottom="8dp" />
+
+            <ProgressBar
+                android:id="@+id/progressDownload"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="100"
+                android:progressTint="@color/adam_green"
+                android:progressBackgroundTint="@color/adam_green_faint" />
+
+            <TextView
+                android:id="@+id/tvDownloadDetail"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="12sp"
+                android:textColor="@color/adam_text"
+                android:layout_marginTop="4dp" />
+       </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvModelStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="12sp"
+            android:textColor="@color/adam_text_dim"
+            android:layout_marginTop="24dp"
+            android:lineSpacingExtra="4dp" />
+   </LinearLayout>
+</ScrollView>

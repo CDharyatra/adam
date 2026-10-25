@@ -1,0 +1,27 @@
+<resources>
+    <!-- Adam green-on-black theme -->
+    <style name="Theme.Adam" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/adam_green</item>
+        <item name="colorPrimaryVariant">@color/adam_green_dark</item>
+        <item name="colorOnPrimary">@color/adam_black</item>
+        <item name="colorSecondary">@color/adam_green_bright</item>
+        <item name="colorSecondaryVariant">@color/adam_green_dim</item>
+        <item name="colorOnSecondary">@color/adam_black</item>
+        <item name="android:statusBarColor">@color/adam_black</item>
+        <item name="android:navigationBarColor">@color/adam_black</item>
+        <item name="android:windowBackground">@color/adam_bg</item>
+        <item name="android:textColorPrimary">@color/adam_text</item>
+        <item name="android:textColorSecondary">@color/adam_text_dim</item>
+        <item name="materialButtonStyle">@style/Widget.Adam.Button</item>
+    </style>
+
+    <style name="Widget.Adam.Button" parent="Widget.MaterialComponents.Button">
+        <item name="backgroundTint">@color/adam_green</item>
+        <item name="android:textColor">@color/adam_black</item>
+        <item name="cornerRadius">14dp</item>
+    </style>
+
+    <style name="Widget.Adam.TextButton" parent="Widget.MaterialComponents.Button.TextButton">
+        <item name="android:textColor">@color/adam_green</item>
+    </style>
+</resources>

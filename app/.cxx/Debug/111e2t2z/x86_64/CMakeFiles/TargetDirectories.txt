@@ -1,0 +1,3 @@
+C:/project adam/app/.cxx/Debug/111e2t2z/x86_64/CMakeFiles/mlc_llm_jni.dir
+C:/project adam/app/.cxx/Debug/111e2t2z/x86_64/CMakeFiles/edit_cache.dir
+C:/project adam/app/.cxx/Debug/111e2t2z/x86_64/CMakeFiles/rebuild_cache.dir

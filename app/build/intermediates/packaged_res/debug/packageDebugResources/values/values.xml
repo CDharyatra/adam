@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="adam_bg">#060A06</color>
+    <color name="adam_black">#000000</color>
+    <color name="adam_card">#111B11</color>
+    <color name="adam_green">#00E676</color>
+    <color name="adam_green_bright">#69F0AE</color>
+    <color name="adam_green_dark">#00C853</color>
+    <color name="adam_green_dim">#1B5E20</color>
+    <color name="adam_green_faint">#0A2E14</color>
+    <color name="adam_red">#FF5252</color>
+    <color name="adam_surface">#0D140D</color>
+    <color name="adam_text">#E8F5E9</color>
+    <color name="adam_text_dim">#8FA598</color>
+    <string name="accessibility_service_description">Adam uses Accessibility Service to control apps on your behalf — all processing stays on-device.</string>
+    <string name="accessibility_service_label">Adam Assistant</string>
+    <string name="app_name">Adam</string>
+    <style name="Theme.Adam" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/adam_green</item>
+        <item name="colorPrimaryVariant">@color/adam_green_dark</item>
+        <item name="colorOnPrimary">@color/adam_black</item>
+        <item name="colorSecondary">@color/adam_green_bright</item>
+        <item name="colorSecondaryVariant">@color/adam_green_dim</item>
+        <item name="colorOnSecondary">@color/adam_black</item>
+        <item name="android:statusBarColor">@color/adam_black</item>
+        <item name="android:navigationBarColor">@color/adam_black</item>
+        <item name="android:windowBackground">@color/adam_bg</item>
+        <item name="android:textColorPrimary">@color/adam_text</item>
+        <item name="android:textColorSecondary">@color/adam_text_dim</item>
+        <item name="materialButtonStyle">@style/Widget.Adam.Button</item>
+    </style>
+    <style name="Widget.Adam.Button" parent="Widget.MaterialComponents.Button">
+        <item name="backgroundTint">@color/adam_green</item>
+        <item name="android:textColor">@color/adam_black</item>
+        <item name="cornerRadius">14dp</item>
+    </style>
+    <style name="Widget.Adam.TextButton" parent="Widget.MaterialComponents.Button.TextButton">
+        <item name="android:textColor">@color/adam_green</item>
+    </style>
+</resources>

@@ -1,0 +1,85 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- black field -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M0,0h108v108h-108z" />
+
+    <!-- faint inner mass so stipple shades the whole face -->
+    <path
+        android:fillColor="#071A0E"
+        android:pathData="M28,46C28,30 40,20 54,20C68,20 80,30 80,46L80,62C80,76 68,84 60,88L48,88C40,84 28,76 28,62Z" />
+
+    <!-- helmet outline -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#00E676"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M28,46C28,30 40,20 54,20C68,20 80,30 80,46L80,62C80,76 68,84 60,88L48,88C40,84 28,76 28,62Z" />
+
+    <!-- antenna -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#00E676"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M54,20L54,10" />
+    <path
+        android:fillColor="#69F0AE"
+        android:pathData="M54,5.5a2.5,2.5 0 1,0 5,0a2.5,2.5 0 1,0 -5,0z" />
+
+    <!-- forehead deco dots -->
+    <path
+        android:fillColor="#00E676"
+        android:pathData="M40,30.5a1.6,1.6 0 1,0 3.2,0a1.6,1.6 0 1,0 -3.2,0zM64.8,30.5a1.6,1.6 0 1,0 3.2,0a1.6,1.6 0 1,0 -3.2,0z" />
+    <path
+        android:fillColor="#69F0AE"
+        android:pathData="M52.4,28.5a1.6,1.6 0 1,0 3.2,0a1.6,1.6 0 1,0 -3.2,0z" />
+
+    <!-- brow accent -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#69F0AE"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M34,44L74,44" />
+
+    <!-- visor -->
+    <path
+        android:fillColor="#1B5E20"
+        android:pathData="M38,50h32a4,4 0 0 1 4,4v4a4,4 0 0 1 -4,4h-32a4,4 0 0 1 -4,-4v-4a4,4 0 0 1 4,-4z" />
+
+    <!-- glowing eyes -->
+    <path
+        android:fillColor="#69F0AE"
+        android:pathData="M41.5,56a4.5,4.5 0 1,0 9,0a4.5,4.5 0 1,0 -9,0zM57.5,56a4.5,4.5 0 1,0 9,0a4.5,4.5 0 1,0 -9,0z" />
+
+    <!-- nose bridge -->
+    <path
+        android:fillColor="#00E676"
+        android:pathData="M52,64h4v8h-4z" />
+
+    <!-- mouth grille -->
+    <path
+        android:fillColor="#00E676"
+        android:pathData="M42,74h24v2.5h-24zM44,78.5h20v2.5h-20zM47,83h14v2.5h-14z" />
+
+    <!-- cheek vents -->
+    <path
+        android:fillColor="#1B5E20"
+        android:pathData="M32,66h3v8h-3zM73,66h3v8h-3z" />
+
+    <!-- ear pods -->
+    <path
+        android:fillColor="#00E676"
+        android:pathData="M20,54h6v12h-6zM82,54h6v12h-6z" />
+    <path
+        android:fillColor="#69F0AE"
+        android:pathData="M21.2,60a1.8,1.8 0 1,0 3.6,0a1.8,1.8 0 1,0 -3.6,0zM83.2,60a1.8,1.8 0 1,0 3.6,0a1.8,1.8 0 1,0 -3.6,0z" />
+
+</vector>
