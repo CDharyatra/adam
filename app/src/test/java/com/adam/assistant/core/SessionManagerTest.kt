@@ -45,7 +45,7 @@ class SessionManagerTest {
     @Test
     fun carriesFieldAndEntries() {
         val sm = SessionManager()
-        val entries = listOf(Contacts.Entry("Mom", "+123"))
+        val entries = listOf(ContactCandidate("Mom", "+123"))
         sm.begin(Session.CONTACT, cmd, entries = entries)
         val s = sm.active()!!
         assertEquals(1, s.entries.size)

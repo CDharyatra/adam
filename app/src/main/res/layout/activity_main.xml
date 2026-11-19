@@ -34,8 +34,8 @@
              Appears once setup starts; dance mode follows AssistantService state. -->
         <com.adam.assistant.ui.AdamOrbView
             android:id="@+id/orbView"
-            android:layout_width="260dp"
-            android:layout_height="260dp"
+            android:layout_width="220dp"
+            android:layout_height="220dp"
             android:layout_marginTop="4dp"
             android:layout_marginBottom="4dp"
             android:contentDescription="Adam voice orb" />
@@ -69,72 +69,391 @@
             android:textSize="13sp"
             android:textColor="@color/adam_text_dim"
             android:gravity="center"
-            android:layout_marginBottom="16dp" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnStartStop"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Start Adam"
-            android:textSize="18sp"
-            app:cornerRadius="14dp"
-            app:backgroundTint="@color/adam_green"
-            android:textColor="@color/adam_black" />
+            android:layout_marginBottom="12dp" />
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:layout_marginTop="16dp">
+            android:gravity="center_vertical">
 
-            <Switch
-                android:id="@+id/swWakeWord"
-                android:layout_width="wrap_content"
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnStartStop"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text='Wake word "Hey Adam"'
-                android:textSize="14sp"
-                android:textColor="@color/adam_text"
-                android:thumbTint="@color/adam_green"
-                android:trackTint="@color/adam_green_dim" />
-       </LinearLayout>
+                android:layout_weight="1"
+                android:minHeight="56dp"
+                android:text="@string/start_adam"
+                android:textSize="16sp"
+                app:cornerRadius="14dp"
+                app:backgroundTint="@color/adam_green"
+                android:textColor="@color/adam_black" />
+
+            <Space
+                android:layout_width="8dp"
+                android:layout_height="1dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnListenOnce"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:minHeight="56dp"
+                android:text="@string/listen_once"
+                android:textSize="16sp"
+                android:enabled="false"
+                android:contentDescription="@string/listen_once_desc"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                app:strokeColor="@color/adam_green"
+                app:strokeWidth="1dp"
+                android:textColor="@color/adam_green" />
+        </LinearLayout>
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text='When enabled, Adam listens in the background. Say "Hey Adam" to start a conversation — keep talking, no button presses needed. Disable to save battery.'
+            android:text="@string/ptt_hint"
             android:textSize="11sp"
             android:textColor="@color/adam_text_dim"
             android:layout_marginTop="4dp" />
 
+        <!-- ── Typed commands: works with no model and no permission ── -->
+
         <TextView
-            android:id="@+id/tvAccessibilityStatus"
+            android:id="@+id/labelTyped"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:text="@string/typed_section"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="@color/adam_text"
+            android:labelFor="@id/etCommand"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/etCommand"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minLines="2"
+            android:maxLines="4"
+            android:gravity="top|start"
+            android:inputType="textCapSentences|textMultiLine"
+            android:hint="@string/typed_hint"
+            android:textSize="16sp"
+            android:textColor="@color/adam_text"
+            android:textColorHint="@color/adam_text_dim"
+            android:padding="12dp"
+            android:background="@drawable/bg_download_panel" />
+
+        <RadioGroup
+            android:id="@+id/rgMode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="4dp">
+
+            <RadioButton
+                android:id="@+id/rbParseOnly"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/mode_parse_only"
+                android:textSize="15sp"
+                android:textColor="@color/adam_text" />
+
+            <RadioButton
+                android:id="@+id/rbPreview"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:checked="true"
+                android:text="@string/mode_preview"
+                android:textSize="15sp"
+                android:textColor="@color/adam_text" />
+
+            <RadioButton
+                android:id="@+id/rbExecute"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:text="@string/mode_execute"
+                android:textSize="15sp"
+                android:textColor="@color/adam_text" />
+        </RadioGroup>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnRunTyped"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="56dp"
+            android:text="@string/run_command"
+            android:textSize="16sp"
+            app:cornerRadius="14dp"
+            app:backgroundTint="@color/adam_green"
+            android:textColor="@color/adam_black" />
+
+        <LinearLayout
+            android:id="@+id/approvalPanel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone"
+            android:layout_marginTop="8dp">
+
+            <TextView
+                android:id="@+id/tvApprovalPrompt"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/approval_prompt"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:textColor="@color/adam_text"
+                android:layout_marginBottom="4dp" />
+
+            <TextView
+                android:id="@+id/tvApprovalDetail"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="12sp"
+                android:textColor="@color/adam_text_dim"
+                android:fontFamily="monospace"
+                android:textIsSelectable="true"
+                android:padding="8dp"
+                android:background="@drawable/bg_download_panel"
+                android:layout_marginBottom="8dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnApprove"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:minHeight="48dp"
+                    android:text="@string/approve_action"
+                    android:textSize="14sp"
+                    app:cornerRadius="14dp"
+                    app:backgroundTint="@color/adam_green"
+                    android:textColor="@color/adam_black" />
+
+                <Space
+                    android:layout_width="8dp"
+                    android:layout_height="1dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnReject"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:minHeight="48dp"
+                    android:text="@string/reject_action"
+                    android:textSize="14sp"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                    app:strokeColor="@color/adam_green"
+                    app:strokeWidth="1dp"
+                    android:textColor="@color/adam_green" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnCancelCommand"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:minHeight="48dp"
+                android:text="@string/cancel_command"
+                android:textSize="13sp"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                app:strokeColor="@color/adam_green"
+                app:strokeWidth="1dp"
+                android:textColor="@color/adam_green" />
+
+            <Space
+                android:layout_width="8dp"
+                android:layout_height="1dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnStopSpeaking"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:minHeight="48dp"
+                android:text="@string/stop_speaking"
+                android:textSize="13sp"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                app:strokeColor="@color/adam_green"
+                app:strokeWidth="1dp"
+                android:textColor="@color/adam_green" />
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnEditTranscript"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="@string/edit_last_transcript"
             android:textSize="14sp"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:textColor="@color/adam_green_bright" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/typed_works_offline"
+            android:textSize="11sp"
+            android:textColor="@color/adam_text_dim"
+            android:layout_marginBottom="8dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/command_details_title"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:textColor="@color/adam_text"
+            android:layout_marginBottom="4dp" />
+
+        <TextView
+            android:id="@+id/tvCommandDetails"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/command_details_placeholder"
+            android:textSize="12sp"
+            android:textColor="@color/adam_text"
+            android:fontFamily="monospace"
+            android:textIsSelectable="true"
+            android:padding="12dp"
+            android:background="@drawable/bg_download_panel" />
+
+        <!-- ── Independent capability readiness ── -->
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/capabilities_title"
+            android:textSize="18sp"
+            android:textStyle="bold"
             android:textColor="@color/adam_text"
             android:layout_marginTop="24dp"
             android:layout_marginBottom="8dp" />
+
+        <TextView
+            android:id="@+id/tvCapabilities"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="13sp"
+            android:textColor="@color/adam_text"
+            android:lineSpacingExtra="4dp"
+            android:layout_marginBottom="8dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnMicPermission"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:minHeight="48dp"
+                android:text="@string/allow_microphone"
+                android:textSize="13sp"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                app:strokeColor="@color/adam_green"
+                app:strokeWidth="1dp"
+                android:textColor="@color/adam_green" />
+
+            <Space
+                android:layout_width="8dp"
+                android:layout_height="1dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnContacts"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:minHeight="48dp"
+                android:text="@string/allow_contacts"
+                android:textSize="13sp"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                app:strokeColor="@color/adam_green"
+                app:strokeWidth="1dp"
+                android:textColor="@color/adam_green" />
+        </LinearLayout>
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnAccessibility"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Enable Accessibility Service"
+            android:minHeight="48dp"
+            android:text="@string/enable_accessibility"
+            android:textSize="14sp"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             app:strokeColor="@color/adam_green"
             app:strokeWidth="1dp"
             android:textColor="@color/adam_green"
-            android:layout_marginBottom="8dp" />
+            android:layout_marginTop="8dp" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnHowToEnable"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="How to enable these permissions"
+            android:minHeight="48dp"
+            android:text="@string/how_to_enable"
+            android:textSize="14sp"
             style="@style/Widget.MaterialComponents.Button.TextButton"
-            android:textColor="@color/adam_green_bright"
+            android:textColor="@color/adam_green_bright" />
+
+        <Switch
+            android:id="@+id/swLlm"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="@string/llm_optional"
+            android:textSize="14sp"
+            android:textColor="@color/adam_text"
+            android:thumbTint="@color/adam_green"
+            android:trackTint="@color/adam_green_dim" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/llm_optional_desc"
+            android:textSize="11sp"
+            android:textColor="@color/adam_text_dim"
             android:layout_marginBottom="8dp" />
+
+        <Switch
+            android:id="@+id/swWakeWord"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="@string/wake_word_toggle"
+            android:textSize="14sp"
+            android:textColor="@color/adam_text"
+            android:thumbTint="@color/adam_green"
+            android:trackTint="@color/adam_green_dim" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/wake_word_desc"
+            android:textSize="11sp"
+            android:textColor="@color/adam_text_dim"
+            android:layout_marginBottom="8dp" />
+
+        <!-- ── Provisioning progress: Stop Adam above stays reachable ── -->
 
         <LinearLayout
             android:id="@+id/downloadPanel"
@@ -150,7 +469,7 @@
                 android:id="@+id/tvDownloadTitle"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Downloading AI model…"
+                android:text="Downloading model…"
                 android:textSize="14sp"
                 android:textStyle="bold"
                 android:textColor="@color/adam_green_bright" />
@@ -180,7 +499,17 @@
                 android:textSize="12sp"
                 android:textColor="@color/adam_text"
                 android:layout_marginTop="4dp" />
-       </LinearLayout>
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/models_title"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:textColor="@color/adam_text"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="4dp" />
 
         <TextView
             android:id="@+id/tvModelStatus"
@@ -188,7 +517,6 @@
             android:layout_height="wrap_content"
             android:textSize="12sp"
             android:textColor="@color/adam_text_dim"
-            android:layout_marginTop="24dp"
             android:lineSpacingExtra="4dp" />
-   </LinearLayout>
+    </LinearLayout>
 </ScrollView>

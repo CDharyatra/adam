@@ -2,4 +2,37 @@
     <string name="app_name">Adam</string>
     <string name="accessibility_service_label">Adam Assistant</string>
     <string name="accessibility_service_description">Adam uses Accessibility Service to control apps on your behalf — all processing stays on-device.</string>
+
+    <string name="start_adam">Start Adam</string>
+    <string name="stop_adam">Stop Adam</string>
+    <string name="listen_once">Listen once</string>
+    <string name="listen_once_desc">Start one microphone capture. Tap again to stop listening.</string>
+    <string name="ptt_hint">Listen once uses the microphone. Typed commands never need it.</string>
+
+    <string name="typed_section">Type a command</string>
+    <string name="typed_hint">Type a command, for example: Open Spotify</string>
+    <string name="mode_parse_only">Parse only</string>
+    <string name="mode_preview">Preview (dry run)</string>
+    <string name="mode_execute">Execute</string>
+    <string name="run_command">Run command</string>
+    <string name="cancel_command">Cancel current command</string>
+    <string name="stop_speaking">Stop speaking</string>
+    <string name="edit_last_transcript">Edit last transcript</string>
+    <string name="typed_works_offline">Typed Preview works without models, microphone, contacts, or accessibility.</string>
+    <string name="approval_prompt">Review and approve before Adam acts</string>
+    <string name="approve_action">Approve</string>
+    <string name="reject_action">Reject</string>
+    <string name="command_details_title">Command details</string>
+    <string name="command_details_placeholder">Action: —\nSlots: —\nProvenance: —\nValidation: —\nDialog: none\nAdapter: mock\nOutcome: —</string>
+
+    <string name="capabilities_title">Capabilities</string>
+    <string name="allow_microphone">Allow microphone</string>
+    <string name="allow_contacts">Allow contacts</string>
+    <string name="enable_accessibility">Enable accessibility</string>
+    <string name="how_to_enable">How permissions are used</string>
+    <string name="llm_optional">Optional AI model (Gemma 3 1B)</string>
+    <string name="llm_optional_desc">Off by default. Adds an ~800 MB on-device model for unusual phrasing; deterministic commands already work without it.</string>
+    <string name="wake_word_toggle">Wake word "Hey Adam"</string>
+    <string name="wake_word_desc">Off by default. When on, Adam keeps the microphone open in the background and starts a conversation when it hears the wake phrase.</string>
+    <string name="models_title">Models</string>
 </resources>

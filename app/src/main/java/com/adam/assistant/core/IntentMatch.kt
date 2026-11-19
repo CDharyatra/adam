@@ -20,5 +20,7 @@ data class IntentMatch(
     val command: AssistantCommand,
     val confidence: Float,
     val source: MatchSource,
-    val reasonCode: String = ""
+    val reasonCode: String = "",
+    val rawText: String = "",
+    val spans: Map<String, IntRange> = emptyMap()
 )

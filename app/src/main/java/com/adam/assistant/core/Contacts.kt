@@ -2,85 +2,156 @@ package com.adam.assistant.core
 
 import android.content.Context
 import android.provider.ContactsContract
+import java.text.Normalizer
+import java.util.Locale
 
-/**
- * Phone contacts: the fix for proper names speech models mangle.
- *
- * Small STT models turn "Shubhanshu" into "sure" / "show one shoe" because
- * such names barely exist in their language model. Two-part answer:
- *  1. [grammarJson] constrains Vosk to a custom vocabulary (the user's own
- *     contact names) when we ask "who?", snapping audio onto real names.
- *  2. [bestMatch] fuzzy-matches any heard string against real contacts as a
- *     safety net (exact → contains → edit-similarity).
- */
 object Contacts {
 
-    data class Entry(val name: String, val phone: String?)
-
     private val fillerWords = setOf("uh", "um", "uhm", "er", "hey", "please", "the")
+    private val marks = Regex("\\p{M}+")
+    private val separators = Regex("[^\\p{L}\\p{N}]+")
 
-    /** Up to [max] contacts with phone numbers, de-duplicated by name. */
-    fun load(context: Context, max: Int = 200): List<Entry> {
-        val out = mutableListOf<Entry>()
+    fun load(context: Context, max: Int = 200): List<ContactCandidate> {
+        val grouped = LinkedHashMap<String, MutableContact>()
         try {
             val uri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
             val cols = arrayOf(
+                ContactsContract.CommonDataKinds.Phone._ID,
+                ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
                 ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-                ContactsContract.CommonDataKinds.Phone.NUMBER
+                ContactsContract.CommonDataKinds.Phone.NUMBER,
+                ContactsContract.CommonDataKinds.Phone.TYPE,
+                ContactsContract.CommonDataKinds.Phone.LABEL
             )
             context.contentResolver.query(
                 uri, cols, null, null,
                 ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC"
             )?.use { c ->
-                val ni = c.getColumnIndex(cols[0])
-                val pi = c.getColumnIndex(cols[1])
-                while (c.moveToNext() && out.size < max) {
-                    val name = c.getString(ni)?.trim() ?: continue
-                    if (name.length < 2) continue
-                    val phone = c.getString(pi)?.trim()?.takeIf { it.isNotBlank() }
-                    out += Entry(name, phone)
+                val idIndex = c.getColumnIndex(cols[0])
+                val contactIndex = c.getColumnIndex(cols[1])
+                val nameIndex = c.getColumnIndex(cols[2])
+                val numberIndex = c.getColumnIndex(cols[3])
+                val typeIndex = c.getColumnIndex(cols[4])
+                val labelIndex = c.getColumnIndex(cols[5])
+                while (c.moveToNext()) {
+                    val name = c.getString(nameIndex)?.trim().orEmpty()
+                    if (name.length < 2 && name.codePointCount(0, name.length) < 2) continue
+                    val number = c.getString(numberIndex)?.trim().orEmpty()
+                    if (number.isBlank()) continue
+                    val contactId = c.getLong(contactIndex).takeIf { it > 0L }
+                    val key = contactId?.let { "id:$it" }
+                        ?: "name:${norm(name)}"
+                    val existing = grouped[key]
+                    if (existing == null && grouped.size >= max) break
+                    val entry = existing ?: MutableContact(name, contactId).also {
+                        grouped[key] = it
+                    }
+                    val phoneId = c.getLong(idIndex).takeIf { it > 0L }
+                    if (entry.numbers.any { it.id != null && it.id == phoneId }) continue
+                    if (entry.numbers.any { it.number == number }) continue
+                    val label = if (typeIndex >= 0) {
+                        val type = c.getInt(typeIndex)
+                        val custom = if (labelIndex >= 0) c.getString(labelIndex) else null
+                        ContactsContract.CommonDataKinds.Phone.getTypeLabel(
+                            context.resources, type, custom
+                        ).toString()
+                    } else {
+                        null
+                    }
+                    entry.numbers += ContactNumber(phoneId, number, label)
                 }
             }
         } catch (_: Exception) {
-            // Contacts unavailable: callers degrade to un-resolved targets.
+            return emptyList()
         }
-        return out.distinctBy { it.name.lowercase() }
+        return grouped.values.map { entry ->
+            val numbers = entry.numbers.toList()
+            ContactCandidate(
+                name = entry.name,
+                phone = numbers.firstOrNull()?.number,
+                contactId = entry.contactId,
+                phoneId = numbers.firstOrNull()?.id,
+                numbers = numbers
+            )
+        }
     }
 
-    /** Vosk grammar JSON: contact names as the allowed vocabulary. */
-    fun grammarJson(entries: List<Entry>): String {
-        val names = entries.map { it.name.lowercase() }.distinct().take(150)
+    fun grammarJson(entries: List<ContactCandidate>): String {
+        val names = entries.flatMap { listOf(it.name) + it.aliases }
+            .map { it.lowercase(Locale.ROOT) }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .take(150)
         val all = listOf("[unk]") + names
         return all.joinToString(prefix = "[", postfix = "]") { "\"${esc(it)}\"" }
     }
 
-    /** Best contact for [heard], or null when nothing is close enough. */
-    fun bestMatch(entries: List<Entry>, heard: String): Entry? {
-        val h = norm(heard)
-        if (h.isBlank()) return null
-        entries.firstOrNull { norm(it.name) == h }?.let { return it }
-        var best: Entry? = null
-        var bestScore = 0.0
-        for (e in entries) {
-            val score = similarity(h, norm(e.name))
-            if (score > bestScore) {
-                bestScore = score
-                best = e
-            }
+    fun match(entries: List<ContactCandidate>, heard: String): ContactMatch {
+        val query = norm(heard)
+        if (query.isBlank()) return ContactMatch.NotFound
+        val scored = entries.map { it to score(heard, it) }
+            .filter { it.second > 0.0 }
+            .sortedByDescending { it.second }
+        if (scored.isEmpty()) return ContactMatch.NotFound
+
+        val exact = scored.filter { it.second >= 0.9999 }.map { it.first }
+        if (exact.size == 1) return ContactMatch.Resolved(exact.first())
+        if (exact.size > 1) return ContactMatch.Ambiguous(exact)
+
+        val top = scored.first()
+        if (top.second < 0.62) return ContactMatch.NotFound
+        val close = scored
+            .takeWhile { top.second - it.second <= 0.08 }
+            .take(5)
+            .map { it.first }
+        return if (close.size == 1) {
+            ContactMatch.Resolved(close.first())
+        } else {
+            ContactMatch.Ambiguous(close)
         }
-        return if (bestScore >= 0.62) best else null
     }
 
-    private fun norm(s: String): String =
-        s.lowercase()
-            .split(Regex("[^a-z]+"))
+    fun byNumber(
+        entries: List<ContactCandidate>,
+        heard: String,
+        region: String?
+    ): List<ContactCandidate> {
+        if (!PhoneNumber.isPlausible(heard)) return emptyList()
+        return entries.filter { candidate ->
+            candidate.allNumbers().any { PhoneNumber.same(it.number, heard, region) }
+        }
+    }
+
+    fun norm(value: String): String =
+        Normalizer.normalize(value, Normalizer.Form.NFKD)
+            .replace(marks, "")
+            .lowercase(Locale.ROOT)
+            .split(separators)
             .filter { it.isNotEmpty() && it !in fillerWords }
             .joinToString(" ")
+
+    private fun score(heard: String, candidate: ContactCandidate): Double {
+        val query = norm(heard)
+        if (query.isBlank()) return 0.0
+        var best = 0.0
+        for (variant in listOf(candidate.name) + candidate.aliases) {
+            val name = norm(variant)
+            if (name.isBlank()) continue
+            val value = when {
+                name == query -> 1.0
+                name.startsWith("$query ") || query.startsWith("$name ") -> 0.9
+                name.contains(query) || query.contains(name) -> 0.86
+                else -> similarity(query, name)
+            }
+            if (value > best) best = value
+        }
+        return best
+    }
 
     private fun similarity(a: String, b: String): Double {
         if (a.isEmpty() || b.isEmpty()) return 0.0
         val spaceless = 1.0 - lev(a.replace(" ", ""), b.replace(" ", "")) /
-                maxOf(a.replace(" ", "").length, b.replace(" ", "").length).toDouble()
+            maxOf(a.replace(" ", "").length, b.replace(" ", "").length).toDouble()
         val spaced = 1.0 - lev(a, b) / maxOf(a.length, b.length).toDouble()
         return maxOf(spaceless, spaced)
     }
@@ -100,11 +171,20 @@ object Contacts {
                     prev[j - 1] + if (a[i - 1] == b[j - 1]) 0 else 1
                 )
             }
-            val tmp = prev; prev = curr; curr = tmp
+            val tmp = prev
+            prev = curr
+            curr = tmp
         }
         return prev[b.length]
     }
 
-    private fun esc(s: String): String =
-        s.replace("\\", "\\\\").replace("\"", "\\\"")
+    private fun esc(value: String): String =
+        value.replace("\\", "\\\\").replace("\"", "\\\"")
+
+    private class MutableContact(
+        val name: String,
+        val contactId: Long?
+    ) {
+        val numbers = mutableListOf<ContactNumber>()
+    }
 }

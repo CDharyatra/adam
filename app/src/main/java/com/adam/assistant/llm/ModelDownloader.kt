@@ -3,6 +3,12 @@ package com.adam.assistant.llm
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import com.adam.assistant.BuildConfig
+import com.adam.assistant.core.ArtifactCheck
+import com.adam.assistant.core.ModelArtifact
+import com.adam.assistant.core.ProvisionBudget
+import com.adam.assistant.core.ProvisionSafety
+import com.adam.assistant.core.ProvisionVerifier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -146,13 +152,21 @@ class ModelDownloader private constructor(private val context: Context) {
             if (files.isEmpty()) return@withContext fail(Kind.LLM, "Model has no files on Hugging Face.")
 
             val totalBytes = computeTotalSizes(modelId, files)
+            val downloaded = existingBytes(modelDir, files)
             _progress.value = Progress(
                 state = State.DOWNLOADING,
                 kind = Kind.LLM,
                 totalBytes = totalBytes,
-                downloadedBytes = existingBytes(modelDir, files),
+                downloadedBytes = downloaded,
                 fileCount = files.size
             )
+
+            // Gate on the bytes still to write, not the whole model, so a
+            // near-complete resume isn't blocked by its own partials.
+            val remaining = (totalBytes - downloaded).coerceAtLeast(0L)
+            if (insufficientSpace(remaining, ProvisionBudget.DOWNLOAD_HEADROOM_MULTIPLIER)) {
+                return@withContext fail(Kind.LLM, lowSpaceMessage(remaining, ProvisionBudget.DOWNLOAD_HEADROOM_MULTIPLIER))
+            }
 
             for ((index, filePath) in files.withIndex()) {
                 if (canceled) return@withContext cancel(Kind.LLM)
@@ -213,9 +227,16 @@ class ModelDownloader private constructor(private val context: Context) {
 
         if (!hasNetwork()) return@withContext fail(Kind.SPEECH, "No internet connection.")
 
+        if (insufficientSpace(totalBytes, ProvisionBudget.EXTRACTION_HEADROOM_MULTIPLIER)) {
+            return@withContext fail(Kind.SPEECH, lowSpaceMessage(totalBytes, ProvisionBudget.EXTRACTION_HEADROOM_MULTIPLIER))
+        }
+
         try {
-            modelDir.deleteRecursively()
-            modelDir.mkdirs()
+            // Extract into a staging dir and only then swap it in, so a
+            // failed/interrupted run leaves any working model untouched and
+            // never promotes a partial extraction.
+            val staging = stagingDirFor(modelDir)
+            prepareStaging(staging)
 
             _progress.value = Progress(
                 state = State.DOWNLOADING,
@@ -240,11 +261,14 @@ class ModelDownloader private constructor(private val context: Context) {
                 state = State.EXTRACTING,
                 currentFile = "Extracting…"
             )
-            unzipStripTopFolder(zipFile, modelDir)
+            unzipStripTopFolder(zipFile, staging)
             zipFile.delete()
 
-            if (!File(modelDir, SPEECH_MARKER).exists()) {
+            if (!File(staging, SPEECH_MARKER).exists()) {
                 throw IOException("Extracted archive is missing $SPEECH_MARKER")
+            }
+            if (!activateStaging(staging, modelDir)) {
+                throw IOException("Could not activate the speech model.")
             }
 
             _progress.value = _progress.value.copy(state = State.COMPLETE)
@@ -283,6 +307,10 @@ class ModelDownloader private constructor(private val context: Context) {
         try { modelDir.deleteRecursively() } catch (_: Exception) { }
 
         if (!hasNetwork()) return@withContext fail(Kind.ASR, "No internet connection.")
+
+        if (insufficientSpace(SHERPA_MODEL_BYTES, ProvisionBudget.DOWNLOAD_HEADROOM_MULTIPLIER)) {
+            return@withContext fail(Kind.ASR, lowSpaceMessage(SHERPA_MODEL_BYTES, ProvisionBudget.DOWNLOAD_HEADROOM_MULTIPLIER))
+        }
 
         try {
             modelDir.mkdirs()
@@ -334,8 +362,15 @@ class ModelDownloader private constructor(private val context: Context) {
         if (!hasNetwork()) return true
         for (name in names) {
             val expected = headSize("$SHERPA_HF_BASE/$name")
+            if (expected <= 0L) continue // HEAD unknown → trust local, don't force re-download
             val local = File(dir, name).length()
-            if (expected > 0L && local != expected) {
+            val check = ProvisionVerifier.check(
+                exists = true,
+                actualBytes = local,
+                actualHash = null,
+                artifact = ModelArtifact(name, bytes = expected)
+            )
+            if (check is ArtifactCheck.SizeMismatch) {
                 android.util.Log.w("Adam", "Sherpa $name size mismatch (local=$local server=$expected), re-downloading")
                 return false
             }
@@ -344,23 +379,50 @@ class ModelDownloader private constructor(private val context: Context) {
     }
 
     /** Resumable single-file GET (Range + .partial), for HuggingFace blobs. */
-    private fun downloadUrlToFile(url: String, target: File, onChunk: (Int) -> Unit) {
+    private fun downloadUrlToFile(url: String, target: File, onChunk: (Int) -> Unit) =
+        resumableDownload(url, target, onChunk)
+
+    /**
+     * Shared resumable single-file download. Honors HTTP Range, restarts from
+     * scratch on 416 (our cached partial is stale), and rejects a truncated
+     * stream (premature EOF keep the partial for resume). So a partial file is
+     * never promoted into a target that later fails natively.
+     */
+    private fun resumableDownload(url: String, target: File, onChunk: (Int) -> Unit) {
         target.parentFile?.mkdirs()
         val partial = File(target.parentFile, target.name + ".partial")
-        val existing = if (partial.exists()) partial.length() else 0L
+        var existing = if (partial.exists()) partial.length() else 0L
 
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+        var conn = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 20_000
             readTimeout = 120_000
             if (existing > 0L) setRequestProperty("Range", "bytes=$existing-")
             doInput = true
         }
-        val code = conn.responseCode
+        var code = conn.responseCode
+        if (code == 416) {
+            // Cached partial is stale/longer than the file: discard and restart.
+            conn.disconnect()
+            partial.delete()
+            existing = 0L
+            conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 20_000
+                readTimeout = 120_000
+                doInput = true
+            }
+            code = conn.responseCode
+        }
         if (code != HttpURLConnection.HTTP_OK && code != HttpURLConnection.HTTP_PARTIAL) {
             conn.disconnect()
             throw IOException("HTTP $code for ${target.name}")
         }
-        FileOutputStream(partial, code == HttpURLConnection.HTTP_PARTIAL).use { out ->
+        val append = code == HttpURLConnection.HTTP_PARTIAL && existing > 0L
+        val contentLen = conn.contentLengthLong
+        val expectedTotal = when (code) {
+            HttpURLConnection.HTTP_OK -> contentLen.takeIf { it > 0L }
+            else -> (existing + contentLen).takeIf { contentLen > 0L }
+        }
+        FileOutputStream(partial, append).use { out ->
             conn.inputStream.use { input ->
                 val buffer = ByteArray(64 * 1024)
                 while (!canceled) {
@@ -373,6 +435,9 @@ class ModelDownloader private constructor(private val context: Context) {
         }
         conn.disconnect()
         if (canceled) return
+        if (expectedTotal != null && partial.length() < expectedTotal) {
+            throw IOException("Incomplete download for ${target.name}")
+        }
         if (!partial.renameTo(target)) {
             partial.copyTo(target, overwrite = true)
             partial.delete()
@@ -422,9 +487,15 @@ class ModelDownloader private constructor(private val context: Context) {
 
         if (!hasNetwork()) return@withContext fail(Kind.KWS, "No internet connection.")
 
+        if (insufficientSpace(KWS_TARBALL_BYTES, ProvisionBudget.EXTRACTION_HEADROOM_MULTIPLIER)) {
+            return@withContext fail(Kind.KWS, lowSpaceMessage(KWS_TARBALL_BYTES, ProvisionBudget.EXTRACTION_HEADROOM_MULTIPLIER))
+        }
+
         try {
-            modelDir.deleteRecursively()
-            modelDir.mkdirs()
+            // Staging + atomic activation (see ensureSpeechModel): never delete
+            // a working KWS model before a fresh one is fully extracted.
+            val staging = stagingDirFor(modelDir)
+            prepareStaging(staging)
 
             _progress.value = Progress(
                 state = State.DOWNLOADING,
@@ -449,13 +520,16 @@ class ModelDownloader private constructor(private val context: Context) {
                 state = State.EXTRACTING,
                 currentFile = "Extracting…"
             )
-            extractTarBz2(archive, modelDir)
+            extractTarBz2(archive, staging)
             archive.delete()
 
-            if (!File(modelDir, KWS_TOKENS_FILE).exists() ||
-                !File(modelDir, KWS_ENCODER_FILE).exists()
+            if (!File(staging, KWS_TOKENS_FILE).exists() ||
+                !File(staging, KWS_ENCODER_FILE).exists()
             ) {
                 throw IOException("KWS archive is missing model files")
+            }
+            if (!activateStaging(staging, modelDir)) {
+                throw IOException("Could not activate the keyword-spotter model.")
             }
 
             _progress.value = _progress.value.copy(state = State.COMPLETE)
@@ -481,12 +555,23 @@ class ModelDownloader private constructor(private val context: Context) {
             // would fail inside MediaPipe with an opaque native error.
             if (hasNetwork()) {
                 val expected = headSize(url)
-                if (expected > 0L && target.length() != expected) {
-                    android.util.Log.w(
-                        "Adam",
-                        "LLM task size mismatch (local=${target.length()} server=$expected), re-downloading"
+                if (expected > 0L) {
+                    val check = ProvisionVerifier.check(
+                        exists = true,
+                        actualBytes = target.length(),
+                        actualHash = null,
+                        artifact = ModelArtifact(file, bytes = expected)
                     )
-                    try { target.delete() } catch (_: Exception) { }
+                    if (check is ArtifactCheck.SizeMismatch) {
+                        android.util.Log.w(
+                            "Adam",
+                            "LLM task size mismatch (local=${target.length()} server=$expected), re-downloading"
+                        )
+                        try { target.delete() } catch (_: Throwable) { }
+                    } else {
+                        _progress.value = Progress(state = State.COMPLETE, kind = Kind.LLM)
+                        return@withContext target
+                    }
                 } else {
                     _progress.value = Progress(state = State.COMPLETE, kind = Kind.LLM)
                     return@withContext target
@@ -498,6 +583,10 @@ class ModelDownloader private constructor(private val context: Context) {
         }
 
         if (!hasNetwork()) return@withContext fail(Kind.LLM, "No internet connection.")
+
+        if (insufficientSpace(totalBytes, ProvisionBudget.DOWNLOAD_HEADROOM_MULTIPLIER)) {
+            return@withContext fail(Kind.LLM, lowSpaceMessage(totalBytes, ProvisionBudget.DOWNLOAD_HEADROOM_MULTIPLIER))
+        }
 
         try {
             modelDir.mkdirs()
@@ -527,6 +616,24 @@ class ModelDownloader private constructor(private val context: Context) {
 
     fun freeSpaceBytes(): Long = context.getExternalFilesDir(null)?.usableSpace ?: 0L
 
+    /**
+     * True when there is not enough free space to download (and stage/extract)
+     * an artifact of [downloadBytes]. Unknown sizes never block. Checked before
+     * any write so a low disk fails cleanly instead of truncating a model.
+     */
+    private fun insufficientSpace(
+        downloadBytes: Long,
+        multiplier: Long = ProvisionBudget.DOWNLOAD_HEADROOM_MULTIPLIER
+    ): Boolean = !ProvisionBudget.hasRoom(freeSpaceBytes(), downloadBytes, multiplier)
+
+    private fun lowSpaceMessage(
+        downloadBytes: Long,
+        multiplier: Long = ProvisionBudget.DOWNLOAD_HEADROOM_MULTIPLIER
+    ): String {
+        val needMb = ProvisionBudget.requiredForDownload(downloadBytes, multiplier) / 1_048_576L
+        return "Not enough free space. Free at least about $needMb MB and try again."
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private fun fail(kind: Kind, msg: String): File? {
@@ -540,6 +647,9 @@ class ModelDownloader private constructor(private val context: Context) {
     }
 
     private fun hasNetwork(): Boolean {
+        // Strict offline flavor: no download path runs (also has no INTERNET
+        // permission), so model provisioning is import-only there.
+        if (BuildConfig.OFFLINE_BUILD) return false
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val network = cm.activeNetwork ?: return false
         val caps = cm.getNetworkCapabilities(network) ?: return false
@@ -600,43 +710,7 @@ class ModelDownloader private constructor(private val context: Context) {
         filePath: String,
         target: File,
         onChunk: (Int) -> Unit
-    ) {
-        target.parentFile?.mkdirs()
-        val downloadUrl = "$HF_BASE/$modelId/resolve/main/$filePath"
-        val partial = File(target.parentFile, target.name + ".partial")
-        val existing = if (partial.exists()) partial.length() else 0L
-
-        val conn = (URL(downloadUrl).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 20_000
-            readTimeout = 60_000
-            if (existing > 0L) setRequestProperty("Range", "bytes=$existing-")
-            doInput = true
-        }
-        val code = conn.responseCode
-        if (code != HttpURLConnection.HTTP_OK && code != HttpURLConnection.HTTP_PARTIAL) {
-            conn.disconnect()
-            throw IOException("HTTP $code for $filePath")
-        }
-
-        FileOutputStream(partial, /* append = */ code == HttpURLConnection.HTTP_PARTIAL).use { out ->
-            conn.inputStream.use { input ->
-                val buffer = ByteArray(64 * 1024)
-                while (!canceled) {
-                    val read = input.read(buffer)
-                    if (read <= 0) break
-                    out.write(buffer, 0, read)
-                    onChunk(read)
-                }
-            }
-        }
-        conn.disconnect()
-        if (canceled) return
-
-        if (!partial.renameTo(target)) {
-            partial.copyTo(target, overwrite = true)
-            partial.delete()
-        }
-    }
+    ) = resumableDownload("$HF_BASE/$modelId/resolve/main/$filePath", target, onChunk)
 
     private fun downloadZip(url: String, target: File, onChunk: (Int) -> Unit) =
         downloadToFile(url, target, onChunk)
@@ -701,13 +775,19 @@ class ModelDownloader private constructor(private val context: Context) {
                 org.apache.commons.compress.archivers.tar.TarArchiveInputStream(bz).use { tis ->
                     var entry = tis.nextEntry
                     while (entry != null) {
+                        // Reject symlinks/special/absolute/traversal entries before
+                        // touching the filesystem (Task 9: real descendant check,
+                        // not string prefix).
+                        ProvisionSafety.entryRejection(
+                            entry.name,
+                            isSymlink = entry.isSymbolicLink || entry.isLink
+                        )?.let { throw IOException(it) }
                         // Archives contain a top folder (sherpa-onnx-.../encoder...):
                         // strip it so model files land directly in target.
-                        val stripped = entry.name.substringAfter('/')
+                        val stripped = ProvisionSafety.stripLeadingComponent(entry.name)
                         if (stripped.isNotEmpty()) {
                             val outFile = File(target, stripped)
-                            val outCanonical = outFile.canonicalPath
-                            if (!outCanonical.startsWith(targetCanonical)) {
+                            if (!ProvisionSafety.isDescendantOf(outFile.canonicalPath, targetCanonical)) {
                                 throw IOException("Tar slip attempt: ${entry.name}")
                             }
                             if (entry.isDirectory) {
@@ -729,11 +809,12 @@ class ModelDownloader private constructor(private val context: Context) {
         ZipInputStream(FileInputStream(zip)).use { zis ->
             var entry = zis.nextEntry
             while (entry != null) {
-                val stripped = entry.name.substringAfter('/')
+                ProvisionSafety.entryRejection(entry.name)
+                    ?.let { throw IOException(it) }
+                val stripped = ProvisionSafety.stripLeadingComponent(entry.name)
                 if (stripped.isNotEmpty()) {
                     val outFile = File(target, stripped)
-                    val outCanonical = outFile.canonicalPath
-                    if (!outCanonical.startsWith(targetCanonical)) {
+                    if (!ProvisionSafety.isDescendantOf(outFile.canonicalPath, targetCanonical)) {
                         throw IOException("Zip slip attempt: ${entry.name}")
                     }
                     if (entry.isDirectory) {
@@ -745,6 +826,36 @@ class ModelDownloader private constructor(private val context: Context) {
                 }
                 entry = zis.nextEntry
             }
+        }
+    }
+
+    // ── Atomic staging / activation ───────────────────────────────────────────
+
+    private fun stagingDirFor(target: File): File =
+        File(target.parentFile, target.name + ".staging")
+
+    private fun prepareStaging(staging: File) {
+        try { staging.deleteRecursively() } catch (_: Exception) { }
+        staging.mkdirs()
+    }
+
+    /**
+     * Promotes a fully-extracted [staging] dir to [target] atomically. The old
+     * profile is replaced only now — after extraction and marker checks — so an
+     * interrupted or failed run never deletes a working model and never promotes
+     * a partial one (Task 9). Returns false (leaving [staging]) if activation
+     * itself fails.
+     */
+    private fun activateStaging(staging: File, target: File): Boolean {
+        if (!staging.exists()) return false
+        try { if (target.exists()) target.deleteRecursively() } catch (_: Exception) { }
+        if (staging.renameTo(target)) return true
+        return try {
+            staging.copyRecursively(target, overwrite = true)
+            staging.deleteRecursively()
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 }

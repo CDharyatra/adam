@@ -6,11 +6,15 @@ import android.content.Context
 import android.graphics.Path
 import android.graphics.Rect
 import android.hardware.display.DisplayManager
+import android.os.Build
 import android.os.Bundle
 import android.util.DisplayMetrics
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.adam.assistant.core.ScreenItem
+import com.adam.assistant.core.ScreenPick
+import com.adam.assistant.core.ScreenQuery
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -48,19 +52,30 @@ class AdamAccessibilityService : AccessibilityService() {
     fun performRecents() = performGlobalAction(GLOBAL_ACTION_RECENTS)
 
     /**
-     * Finds the first node whose text or content-description contains [label]
-     * (case-insensitive) and clicks it.
+     * Clicks the single actionable element whose label contains [label].
+     * Selection is guarded by [ScreenQuery]: blank labels, hidden/disabled
+     * nodes and duplicate matches never fire a click.
      */
     fun clickNodeWithText(label: String): Boolean {
-        val node = findNodeByText(rootInActiveWindow, label) ?: return false
-        return node.performAction(AccessibilityNodeInfo.ACTION_CLICK).also { node.recycle() }
+        val node = selectedActionNode(label) ?: return false
+        return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
     }
 
-    /** Types [text] into the currently focused input field. */
+    /** Types [text] into the focused editable field only (no arbitrary field). */
     fun typeText(text: String): Boolean {
-        val focused = findFocusedInput(rootInActiveWindow) ?: return false
-        val args = Bundle().apply { putString(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
-        return focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args).also { focused.recycle() }
+        val target = ScreenQuery.pickEditable(snapshotItems())
+            ?: return false
+        val field = target.origin as? AccessibilityNodeInfo ?: return false
+        val args = Bundle().apply {
+            putString(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+        }
+        return field.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    private fun selectedActionNode(label: String): AccessibilityNodeInfo? {
+        val pick = ScreenQuery.pickByLabel(snapshotItems(), label)
+        if (pick !is ScreenPick.Act) return null
+        return pick.item.origin as? AccessibilityNodeInfo
     }
 
     /**
@@ -114,10 +129,10 @@ class AdamAccessibilityService : AccessibilityService() {
         return dispatchGesture(gesture, null, null)
     }
 
-    /** Finds the first node containing [label] and long-presses it. */
+    /** Finds and long-presses the single actionable element matching [label]. */
     fun longClickNodeWithText(label: String): Boolean {
-        val node = findNodeByText(rootInActiveWindow, label) ?: return false
-        return node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK).also { node.recycle() }
+        val node = selectedActionNode(label) ?: return false
+        return node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
     }
 
     /**
@@ -191,7 +206,54 @@ class AdamAccessibilityService : AccessibilityService() {
         return metrics
     }
 
+    /** isVisibleToUser is API 29+; treat every node as visible below that. */
+    private fun AccessibilityNodeInfo.isVisibleNow(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) isVisibleToUser else true
+
     // ── Node search helpers ──────────────────────────────────────────────────
+
+    /**
+     * Flattens the current window into [ScreenItem]s for [ScreenQuery].
+     *
+     * [com.adam.assistant.core.ScreenItem.isActionable] records whether this
+     * item or its nearest clickable ancestor is a valid click target, and
+     * [com.adam.assistant.core.ScreenItem.origin] keeps that target node so the
+     * caller can act on it after selection. Nodes are not recycled here: the
+     * retained [AccessibilityNodeInfo] references are acted on immediately by
+     * the caller, and recycling is unnecessary on modern API levels.
+     */
+    fun snapshotItems(): List<ScreenItem> {
+        val root = rootInActiveWindow ?: return emptyList()
+        val out = ArrayList<ScreenItem>()
+        collectItems(root, clickableAncestor = null, out)
+        return out
+    }
+
+    private fun collectItems(
+        node: AccessibilityNodeInfo,
+        clickableAncestor: AccessibilityNodeInfo?,
+        out: MutableList<ScreenItem>
+    ) {
+        val clickable = if (node.isClickable) node else clickableAncestor
+        val text = node.text?.toString()?.trim().orEmpty()
+        val cd = node.contentDescription?.toString()?.trim().orEmpty()
+        val label = text.ifEmpty { cd }
+        val editable = node.isEditable || node.className?.toString()?.contains("EditText") == true
+        if (label.isNotEmpty() || editable) {
+            out += ScreenItem(
+                label = label,
+                isVisible = node.isVisibleNow(),
+                isEnabled = node.isEnabled,
+                isEditable = editable,
+                isFocused = node.isFocused,
+                isActionable = clickable != null,
+                origin = clickable
+            )
+        }
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { collectItems(it, clickable, out) }
+        }
+    }
 
     fun findNodeByText(root: AccessibilityNodeInfo?, label: String): AccessibilityNodeInfo? {
         root ?: return null
@@ -202,22 +264,6 @@ class AdamAccessibilityService : AccessibilityService() {
         for (i in 0 until root.childCount) {
             val result = findNodeByText(root.getChild(i), label)
             if (result != null) return result
-        }
-        return null
-    }
-
-    private fun findFocusedInput(root: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
-        root ?: return null
-        if (root.isFocused && root.isEditable) return root
-        for (i in 0 until root.childCount) {
-            val r = findFocusedInput(root.getChild(i))
-            if (r != null) return r
-        }
-        // Fall back to any editable field
-        if (root.isEditable) return root
-        for (i in 0 until root.childCount) {
-            val r = findFocusedInput(root.getChild(i))
-            if (r != null) return r
         }
         return null
     }

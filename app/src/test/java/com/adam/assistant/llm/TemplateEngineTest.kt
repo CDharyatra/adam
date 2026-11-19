@@ -8,8 +8,19 @@ class TemplateEngineTest {
 
     private val engine = TemplateEngine(
         listOf(
-            Template("open_app", Action.OPEN_APP, "(open|launch|start) {target}"),
-            Template("play", Action.PLAY_MUSIC, "play {target} [by {artist}]", mapOf("app" to "Spotify")),
+            Template("open_app", Action.OPEN_APP, "(open|launch|start|open up) {target}"),
+            Template(
+                "play",
+                Action.PLAY_MUSIC,
+                "play {target} [by {artist}]",
+                mapOf("app" to "Spotify")
+            ),
+            Template(
+                "message",
+                Action.SEND_MESSAGE,
+                "(text|message|send) {target} [(that|saying) {body}]",
+                mapOf("app" to "WhatsApp")
+            ),
             Template("mute", Action.ADJUST_VOLUME, "mute", mapOf("direction" to "mute")),
             Template("calc", Action.CALCULATE, "(calculate|what is) {target}")
         )
@@ -46,6 +57,13 @@ class TemplateEngineTest {
     }
 
     @Test
+    fun openUpIsASinglePhrase() {
+        val m = engine.match("open up Spotify")
+        assertNotNull(m)
+        assertEquals("Spotify", m!!.slots["target"])
+    }
+
+    @Test
     fun literalOnlyTemplate() {
         val m = engine.match("mute")
         assertNotNull(m)
@@ -57,14 +75,52 @@ class TemplateEngineTest {
     fun noMatch() {
         assertNull(engine.match("blargh foo bar"))
         assertNull(engine.match(""))
-        assertNull(engine.match("call")) // required slot left empty
+        assertNull(engine.match("call"))
     }
 
     @Test
-    fun normalization() {
+    fun normalizationKeepsOriginalCaseAndPunctuation() {
         val m = engine.match("  Play   Yesterday!! ")
         assertNotNull(m)
-        assertEquals("yesterday", m!!.slots["target"])
+        assertEquals("Yesterday!!", m!!.slots["target"])
+    }
+
+    @Test
+    fun sentencePunctuationDoesNotBlockLiteralMatch() {
+        val e = TemplateEngine(
+            listOf(Template("back", Action.BACK, "back"))
+        )
+        assertNotNull(e.match("Back."))
+        assertEquals("back", e.match("Back!")!!.template.id)
+    }
+
+    @Test
+    fun messageBodyKeepsCaseQuotesBackslashesAndNewlines() {
+        val body = "\"line one\"\nline two\\end"
+        val m = engine.match("message John saying $body")
+        assertNotNull(m)
+        assertEquals("John", m!!.slots["target"])
+        assertEquals(body, m.slots["body"])
+    }
+
+    @Test
+    fun thirtyWordTargetIsNotCutOff() {
+        val e = TemplateEngine(
+            listOf(Template("open", Action.OPEN_APP, "open {target}"))
+        )
+        val target = (1..30).joinToString(" ") { "word$it" }
+        val m = e.match("open $target")
+        assertNotNull(m)
+        assertEquals(target, m!!.slots["target"])
+    }
+
+    @Test
+    fun inputCeilingAbstains() {
+        val e = TemplateEngine(
+            listOf(Template("open", Action.OPEN_APP, "open {target}"))
+        )
+        val target = (1..65).joinToString(" ") { "word$it" }
+        assertNull(e.match("open $target"))
     }
 
     @Test

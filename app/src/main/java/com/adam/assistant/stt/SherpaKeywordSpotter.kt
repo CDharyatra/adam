@@ -1,6 +1,8 @@
 package com.adam.assistant.stt
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -161,6 +163,11 @@ class SherpaKeywordSpotter(private val context: Context) : WakeWordDetector {
         chunkMs: Int = 100,
         onChunk: (FloatArray) -> Unit
     ) {
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            throw SecurityException("RECORD_AUDIO permission not granted")
+        }
         val framesPerChunk = SAMPLE_RATE * chunkMs / 1000
         val bufferSize = AudioRecord.getMinBufferSize(
             SAMPLE_RATE,

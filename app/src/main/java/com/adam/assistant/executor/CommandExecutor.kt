@@ -1,7 +1,9 @@
 package com.adam.assistant.executor
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.net.Uri
 import android.provider.AlarmClock
@@ -11,7 +13,11 @@ import android.provider.Settings
 import com.adam.assistant.accessibility.AdamAccessibilityService
 import com.adam.assistant.core.AssistantCommand
 import com.adam.assistant.core.AssistantCommand.Action
+import com.adam.assistant.core.ConsentCheck
+import com.adam.assistant.core.ConsentRules
+import com.adam.assistant.core.KnownApps
 import com.adam.assistant.core.NumberWords
+import com.adam.assistant.core.ValidatedPlan
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -21,18 +27,37 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-class CommandExecutor(private val context: Context) {
+class CommandExecutor(
+    private val context: Context,
+    private val nowMs: () -> Long = { System.nanoTime() / 1_000_000L }
+) {
 
-    suspend fun execute(cmd: AssistantCommand): String = withContext(Dispatchers.Main) {
-        when (cmd.action) {
+    companion object {
+        /** Hard ceiling for a typed timer (24h) so absurd input is refused. */
+        const val MAX_TIMER_SECONDS = 86_400L
+    }
+
+    suspend fun execute(plan: ValidatedPlan): String = withContext(Dispatchers.Main) {
+        when (val consent = ConsentRules.verify(plan, nowMs())) {
+            is ConsentCheck.Denied -> "Blocked: ${consent.reason}."
+            ConsentCheck.Allowed -> dispatch(plan)
+        }
+    }
+
+    private suspend fun dispatch(plan: ValidatedPlan): String {
+        val cmd = plan.command
+        return when (cmd.action) {
             Action.OPEN_APP            -> openApp(cmd.target)
             Action.PLAY_MUSIC          -> playMusic(cmd)
             Action.SEND_MESSAGE        -> sendMessage(cmd)
-            Action.MAKE_CALL           -> makeCall(cmd.target, cmd.params["phone"])
+            Action.MAKE_CALL           -> makeCall(
+                plan.recipient?.displayName ?: cmd.target,
+                plan.recipient?.number ?: cmd.params["phone"]
+            )
             Action.OPEN_URL            -> openUrl(cmd.target)
             Action.SEARCH_WEB          -> searchWeb(cmd.target)
             Action.SET_ALARM           -> setAlarm(cmd)
-            Action.SET_TIMER           -> setTimer(cmd.target)
+            Action.SET_TIMER           -> setTimer(cmd)
             Action.ADD_CALENDAR_EVENT  -> addCalendarEvent(cmd)
             Action.SEND_EMAIL          -> sendEmail(cmd)
             Action.TAKE_PHOTO          -> takePhoto()
@@ -52,13 +77,7 @@ class CommandExecutor(private val context: Context) {
             Action.BACK                -> back()
             Action.HOME                -> home()
             Action.RECENTS             -> recents()
-            Action.REPLY               -> {
-                // Novelty hook: brand-new commands get noted for future learning.
-                cmd.params["pendingLearn"]?.takeIf { it.isNotBlank() }?.let {
-                    com.adam.assistant.core.MemoryStore.logNovel(context, it)
-                }
-                cmd.params["message"] ?: "Done."
-            }
+            Action.REPLY               -> cmd.params["message"] ?: "Done."
             Action.UNKNOWN             -> "Sorry, I didn't understand that command."
         }
     }
@@ -80,18 +99,18 @@ class CommandExecutor(private val context: Context) {
     }
 
     private fun makeCall(contact: String, phone: String?): String {
-        if (!phone.isNullOrBlank()) {
-            val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phone"))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            if (intent.resolveActivity(context.packageManager) != null) {
-                context.startActivity(intent)
-                return "Opening dialer for $contact."
-            }
+        if (phone.isNullOrBlank()) return "I need a phone number to call."
+        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phone"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (intent.resolveActivity(context.packageManager) == null) {
+            return "Could not open the dialer for $contact."
         }
-        val svc = AdamAccessibilityService.instance.value
-            ?: return "Please enable Accessibility Service to call by name."
-        return if (svc.clickNodeWithText(contact)) "Calling $contact."
-        else "Could not find $contact."
+        return try {
+            context.startActivity(intent)
+            "Opening the dialer for $contact. Press call to continue."
+        } catch (e: Exception) {
+            "Could not open the dialer for $contact."
+        }
     }
 
     private fun openUrl(text: String): String {
@@ -128,6 +147,7 @@ class CommandExecutor(private val context: Context) {
     }
 
     private fun setAlarm(cmd: AssistantCommand): String {
+        if (!hasAlarmPermission()) return "I don't have permission to set alarms."
         val text = listOfNotNull(cmd.target.takeIf { it.isNotBlank() }, cmd.params["hour"], cmd.params["minute"]).joinToString(" ")
         val (h, m) = parseTime(text) ?: return "Could not understand the time. Say something like 'set alarm for 7 30 AM'."
         val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
@@ -138,22 +158,31 @@ class CommandExecutor(private val context: Context) {
         }
         return try {
             context.startActivity(intent)
-            "Setting alarm for ${"%02d:%02d".format(h, m)}."
+            "Opening the alarm screen for ${"%02d:%02d".format(h, m)} — confirm to save it."
         } catch (e: Exception) {
             "No alarm app available."
         }
     }
 
-    private fun setTimer(text: String): String {
-        val seconds = parseDurationSeconds(text) ?: return "Could not understand duration. Say 'set timer for 5 minutes'."
+    private fun setTimer(cmd: AssistantCommand): String {
+        if (!hasAlarmPermission()) return "I don't have permission to set timers."
+        // Prefer the typed seconds slot; never silently ignore it. Bound the
+        // value so an absurd number can't be handed to the clock app.
+        val explicit = cmd.params["seconds"]?.toLongOrNull()
+        val seconds = explicit ?: parseDurationSeconds(cmd.target)?.toLong()
+            ?: return "Could not understand duration. Say 'set timer for 5 minutes'."
+        if (seconds < 1L) return "Timer needs at least one second."
+        if (seconds > MAX_TIMER_SECONDS) {
+            return "That's over ${formatDuration(MAX_TIMER_SECONDS)} — pick a shorter timer."
+        }
         val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
-            putExtra(AlarmClock.EXTRA_LENGTH, seconds)
-            putExtra(AlarmClock.EXTRA_MESSAGE, text.ifBlank { "Timer" })
+            putExtra(AlarmClock.EXTRA_LENGTH, seconds.toInt())
+            putExtra(AlarmClock.EXTRA_MESSAGE, cmd.target.ifBlank { "Timer" })
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         return try {
             context.startActivity(intent)
-            "Setting timer for ${formatDuration(seconds)}."
+            "Opening a timer for ${formatDuration(seconds)} — confirm to start it."
         } catch (e: Exception) {
             "No clock app available."
         }
@@ -162,7 +191,12 @@ class CommandExecutor(private val context: Context) {
     private fun addCalendarEvent(cmd: AssistantCommand): String {
         val title = cmd.target.ifBlank { cmd.params["title"] ?: "New event" }
         val desc  = cmd.params["description"] ?: ""
-        val start = cmd.params["start"]?.toLongOrNull() ?: (System.currentTimeMillis() + 60 * 60 * 1000L)
+        // No invented date: a missing/invalid start must be asked for rather
+        // than silently defaulted, so nothing gets created at a made-up time.
+        val start = cmd.params["start"]?.trim()?.toLongOrNull()
+        if (start == null || start <= 0L) {
+            return "When should the event start? Tell me a date and time."
+        }
         val intent = Intent(Intent.ACTION_INSERT).apply {
             data = CalendarContract.Events.CONTENT_URI
             putExtra(CalendarContract.Events.TITLE, title)
@@ -173,7 +207,7 @@ class CommandExecutor(private val context: Context) {
         }
         return try {
             context.startActivity(intent)
-            "Creating event: $title."
+            "Opening a calendar draft: $title — confirm to save it."
         } catch (e: Exception) {
             "No calendar app available."
         }
@@ -297,58 +331,36 @@ class CommandExecutor(private val context: Context) {
         else "Could not swipe."
     }
 
-    private suspend fun playMusic(cmd: AssistantCommand): String {
+    private fun playMusic(cmd: AssistantCommand): String {
         val song   = cmd.target
         val artist = cmd.params["artist"] ?: ""
         val app    = cmd.params["app"] ?: "Spotify"
+        val query  = if (artist.isNotBlank()) "$song $artist" else song
 
-        val query = if (artist.isNotBlank()) "$song $artist" else song
-
-        // Fast path: jump straight into Spotify's search results. Far more
-        // robust than tapping through UI labels that change every release.
+        // Spotify means open/search, never auto-playback (Task 6). The deep
+        // link lands on Spotify's own search screen; playing a track is a
+        // deliberate user tap, so Adam never claims it is "playing".
         if (app.equals("Spotify", ignoreCase = true) && query.isNotBlank()) {
-            try {
+            return try {
                 val uri = Uri.parse("spotify:search:${Uri.encode(query)}")
                 val search = Intent(Intent.ACTION_VIEW, uri)
+                    .setPackage(KnownApps.staticPackage("spotify"))
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 if (search.resolveActivity(context.packageManager) != null) {
                     context.startActivity(search)
-                    return "Searching $query on Spotify."
+                    "Searching \"$query\" on Spotify — pick a track to play it."
+                } else {
+                    "Spotify isn't installed."
                 }
             } catch (_: Exception) {
-                // Fall through to UI automation below.
+                "Couldn't open Spotify search."
             }
         }
 
+        // Other players: open the app and hand off; playback stays manual.
         val openResult = openApp(app)
         if (openResult.contains("not installed")) return openResult
-
-        val svc = AdamAccessibilityService.instance.value
-            ?: return "Please enable Adam's Accessibility Service in Settings."
-
-        waitForNode(svc, "Search") ?: return "Could not load $app."
-        svc.clickNodeWithText("Search")
-
-        waitForNode(svc, "Artists, songs, or podcasts")
-            ?: waitForNode(svc, "Search songs")
-            ?: return "Could not find search field in $app."
-        svc.findEditableInput() ?: return "Could not find search field in $app."
-
-        var typed = svc.typeText(query)
-        if (!typed) {
-            val input = svc.findEditableInput()
-            typed = svc.typeInto(input, query)
-        }
-        if (!typed) return "Could not type into search field in $app."
-
-        waitForNode(svc, "Songs") ?: waitForNode(svc, "SONGS")
-            ?: return "No search results in $app."
-        svc.clickNodeWithText("Songs").also { if (!it) svc.clickNodeWithText("SONGS") }
-
-        waitForNode(svc, song) ?: return "Could not find \"$song\" in $app."
-        svc.clickNodeWithText(song)
-
-        return "Playing $song${if (artist.isNotBlank()) " by $artist" else ""} on $app."
+        return "Opening $app to search \"$query\" — pick a track to play it."
     }
 
     private suspend fun sendMessage(cmd: AssistantCommand): String {
@@ -358,11 +370,21 @@ class CommandExecutor(private val context: Context) {
 
         val phone = cmd.params["phone"]
         if (app.equals("WhatsApp", ignoreCase = true) && !phone.isNullOrBlank()) {
+            // Canonical-number prefilled draft, scoped to the WhatsApp package
+            // so it never lands in some other handler. Falls through to the
+            // generic app path when WhatsApp isn't installed.
             val uri = Uri.parse("https://wa.me/$phone?text=${Uri.encode(body)}")
-            val deepLink = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val deepLink = Intent(Intent.ACTION_VIEW, uri)
+                .setPackage(KnownApps.staticPackage("whatsapp"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             if (deepLink.resolveActivity(context.packageManager) != null) {
-                context.startActivity(deepLink)
-                return "Opening WhatsApp chat with $contact."
+                return try {
+                    context.startActivity(deepLink)
+                    "I opened WhatsApp with a draft to $contact. " +
+                        "Review it and press send yourself."
+                } catch (_: SecurityException) {
+                    "Couldn't open WhatsApp for that number."
+                }
             }
         }
 
@@ -384,10 +406,7 @@ class CommandExecutor(private val context: Context) {
         svc.clickNodeWithText("Type a message").also { if (!it) svc.clickNodeWithText("Message") }
         svc.typeText(body)
 
-        waitForNode(svc, "Send") ?: return "Could not find Send button."
-        svc.clickNodeWithText("Send")
-
-        return "Message sent to $contact on $app."
+        return "I opened $app with a draft to $contact. Review it and press send yourself."
     }
 
     private fun calculate(expression: String): String =
@@ -495,7 +514,7 @@ class CommandExecutor(private val context: Context) {
         return if (found) total else null
     }
 
-    private fun formatDuration(seconds: Int): String {
+    private fun formatDuration(seconds: Long): String {
         val h = seconds / 3600; val m = (seconds % 3600) / 60; val s = seconds % 60
         return when {
             h > 0 -> "${h}h ${m}m"
@@ -504,33 +523,12 @@ class CommandExecutor(private val context: Context) {
         }
     }
 
+    private fun hasAlarmPermission(): Boolean =
+        context.checkSelfPermission(Manifest.permission.SET_ALARM) ==
+            PackageManager.PERMISSION_GRANTED
+
     private fun resolvePackage(appName: String): String {
-        val static = mapOf(
-            "spotify"       to "com.spotify.music",
-            "whatsapp"      to "com.whatsapp",
-            "youtube"       to "com.google.android.youtube",
-            "chrome"        to "com.android.chrome",
-            "maps"          to "com.google.android.apps.maps",
-            "google maps"   to "com.google.android.apps.maps",
-            "gmail"         to "com.google.android.gms",
-            "camera"        to "com.android.camera2",
-            "settings"      to "com.android.settings",
-            "calculator"    to "com.android.calculator2",
-            "clock"         to "com.android.deskclock",
-            "contacts"      to "com.android.contacts",
-            "phone"         to "com.android.dialer",
-            "dialer"        to "com.android.dialer",
-            "messages"      to "com.google.android.apps.messaging",
-            "sms"           to "com.google.android.apps.messaging",
-            "photos"        to "com.google.android.apps.photos",
-            "drive"         to "com.google.android.apps.docs",
-            "instagram"     to "com.instagram.android",
-            "twitter"       to "com.twitter.android",
-            "x"             to "com.twitter.android",
-            "telegram"      to "org.telegram.messenger",
-            "netflix"       to "com.netflix.mediaclient"
-        )
-        static[appName.lowercase()]?.let { return it }
+        KnownApps.staticPackage(appName)?.let { return it }
 
         val pm = context.packageManager
         return pm.queryIntentActivities(

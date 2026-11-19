@@ -1,6 +1,7 @@
 package com.adam.assistant.llm
 
 import com.adam.assistant.core.AssistantCommand
+import java.util.Locale
 
 /**
  * One hassil-style template: a pattern with `{slots}`, `[optional]` parts
@@ -17,16 +18,17 @@ data class TemplateMatch(
     val template: Template,
     val slots: Map<String, String>,
     /** 0.5..0.95 — more matched literals and fewer slots score higher. */
-    val confidence: Float
+    val confidence: Float,
+    val spans: Map<String, IntRange> = emptyMap()
 )
 
 /**
  * Pure-Kotlin template matcher (hassil subset, no dependencies).
  *
- * The pattern compiles to a word-token structure (literals, slots, optional
- * groups, alternation branches) matched against input words with bounded
- * backtracking. Word-level matching can't suffer the separator/anchoring bugs
- * of the regex approach it replaces; best (highest-confidence) template wins.
+ * Matching runs on raw word tokens with case-insensitive literal keys, so slot
+ * values keep the speaker's original case and punctuation. Long slots are
+ * enumerated longest-first under an explicit word ceiling and work budget:
+ * a 30-word target is reachable, a pathological input abstains.
  */
 class TemplateEngine(templates: List<Template>) {
 
@@ -43,22 +45,35 @@ class TemplateEngine(templates: List<Template>) {
         val slotNames: List<String>
     )
 
+    private data class Token(
+        val raw: String,
+        val key: String,
+        val start: Int,
+        val end: Int
+    )
+
     private data class Hit(
         val slots: Map<String, String>,
-        val nextIdx: Int,
+        val spans: Map<String, IntRange>,
         val litMatched: Int,
         val slotsUsed: Int
     )
 
+    private class Budget(var left: Int)
+
     private val compiled = templates.mapNotNull { compile(it) }
 
     fun match(text: String): TemplateMatch? {
-        val words = normalize(text).split(" ").filter { it.isNotEmpty() }
-        if (words.isEmpty()) return null
+        val words = tokenize(text)
+        if (words.isEmpty() || words.size > MAX_INPUT_WORDS) return null
         var best: TemplateMatch? = null
         for (c in compiled) {
-            val hits = matchList(c.elems, words, 0, emptyMap()).take(25)
-                .filter { it.nextIdx == words.size }
+            val hits = mutableListOf<Hit>()
+            walk(
+                c.elems, 0, text, words, 0,
+                emptyMap(), emptyMap(), 0, 0,
+                Budget(MAX_WORK), hits
+            )
             if (hits.isEmpty()) continue
             val h = hits.maxWithOrNull(
                 compareBy<Hit> { it.litMatched }.thenBy { -it.slotsUsed }
@@ -67,46 +82,111 @@ class TemplateEngine(templates: List<Template>) {
             val conf = (0.60f + 0.08f * h.litMatched - 0.04f * h.slotsUsed)
                 .coerceIn(0.5f, 0.95f)
             if (best == null || conf > best.confidence) {
-                best = TemplateMatch(c.template, fullSlots, conf)
+                best = TemplateMatch(c.template, fullSlots, conf, h.spans)
             }
         }
         return best
     }
 
-    private fun matchList(
+    private fun walk(
         elems: List<Elem>,
-        words: List<String>,
+        eIdx: Int,
+        source: String,
+        words: List<Token>,
         wIdx: Int,
-        slots: Map<String, String>
-    ): List<Hit> {
-        if (elems.isEmpty()) return listOf(Hit(slots, wIdx, 0, 0))
-        return when (val first = elems[0]) {
+        slots: Map<String, String>,
+        spans: Map<String, IntRange>,
+        litMatched: Int,
+        slotsUsed: Int,
+        budget: Budget,
+        out: MutableList<Hit>
+    ) {
+        if (out.size >= MAX_HITS) return
+        if (budget.left-- <= 0) return
+        if (eIdx >= elems.size) {
+            if (wIdx == words.size) {
+                out += Hit(slots, spans, litMatched, slotsUsed)
+            }
+            return
+        }
+        when (val e = elems[eIdx]) {
             is Elem.Lit -> {
-                if (wIdx < words.size && words[wIdx] == first.word) {
-                    matchList(elems.drop(1), words, wIdx + 1, slots)
-                        .map { it.copy(litMatched = it.litMatched + 1) }
-                } else emptyList()
+                if (wIdx < words.size && words[wIdx].key == e.word) {
+                    walk(
+                        elems, eIdx + 1, source, words, wIdx + 1,
+                        slots, spans, litMatched + 1, slotsUsed, budget, out
+                    )
+                }
             }
             is Elem.Slot -> {
-                (1..(words.size - wIdx)).asSequence().flatMap { len ->
-                    val v = words.subList(wIdx, wIdx + len).joinToString(" ")
-                    matchList(elems.drop(1), words, wIdx + len, slots + (first.name to v))
-                        .asSequence()
-                        .map { it.copy(slotsUsed = it.slotsUsed + 1) }
-                }.take(25).toList()
+                val maxLen = words.size - wIdx - minWords(elems, eIdx + 1)
+                if (maxLen < 1) return
+                for (len in maxLen downTo 1) {
+                    if (budget.left <= 0 || out.size >= MAX_HITS) return
+                    val first = words[wIdx]
+                    val last = words[wIdx + len - 1]
+                    val value = source.substring(first.start, last.end)
+                    walk(
+                        elems, eIdx + 1, source, words, wIdx + len,
+                        slots + (e.name to value),
+                        spans + (e.name to (first.start..last.end - 1)),
+                        litMatched, slotsUsed + 1, budget, out
+                    )
+                }
             }
-            is Elem.Opt ->
-                matchList(elems.drop(1), words, wIdx, slots) +
-                    matchList(first.inner + elems.drop(1), words, wIdx, slots)
-            is Elem.Alt ->
-                first.branches.asSequence().flatMap { b ->
-                    matchList(b + elems.drop(1), words, wIdx, slots).asSequence()
-                }.take(25).toList()
+            is Elem.Opt -> {
+                walk(
+                    elems, eIdx + 1, source, words, wIdx,
+                    slots, spans, litMatched, slotsUsed, budget, out
+                )
+                walk(
+                    e.inner + suffix(elems, eIdx), 0, source, words, wIdx,
+                    slots, spans, litMatched, slotsUsed, budget, out
+                )
+            }
+            is Elem.Alt -> {
+                for (branch in e.branches) {
+                    walk(
+                        branch + suffix(elems, eIdx), 0, source, words, wIdx,
+                        slots, spans, litMatched, slotsUsed, budget, out
+                    )
+                }
+            }
         }
     }
 
-    private fun normalize(s: String): String =
-        s.lowercase().trim().replace(Regex("\\s+"), " ").trimEnd(',', '.', '!', '?')
+    private fun suffix(elems: List<Elem>, eIdx: Int): List<Elem> =
+        if (eIdx + 1 >= elems.size) emptyList() else elems.subList(eIdx + 1, elems.size)
+
+    private fun minWords(elems: List<Elem>, from: Int): Int {
+        var total = 0
+        for (i in from until elems.size) {
+            total += when (val e = elems[i]) {
+                is Elem.Lit -> 1
+                is Elem.Slot -> 1
+                is Elem.Opt -> 0
+                is Elem.Alt -> e.branches.minOfOrNull { minWords(it, 0) } ?: 0
+            }
+        }
+        return total
+    }
+
+    private fun tokenize(source: String): List<Token> {
+        val out = mutableListOf<Token>()
+        var i = 0
+        while (i < source.length) {
+            while (i < source.length && source[i].isWhitespace()) i++
+            if (i >= source.length) break
+            val start = i
+            while (i < source.length && !source[i].isWhitespace()) i++
+            val raw = source.substring(start, i)
+            out += Token(raw, key(raw), start, i)
+        }
+        return out
+    }
+
+    private fun key(raw: String): String =
+        raw.trim { it in ".,!?;:\"'()[]{}" }.lowercase(Locale.ROOT)
 
     /**
      * Single left-to-right pass with an explicit stack (no recursion): the
@@ -207,5 +287,11 @@ class TemplateEngine(templates: List<Template>) {
         } catch (_: Exception) {
             return null
         }
+    }
+
+    companion object {
+        const val MAX_INPUT_WORDS = 64
+        private const val MAX_HITS = 512
+        private const val MAX_WORK = 100_000
     }
 }

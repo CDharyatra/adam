@@ -4,6 +4,7 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.Locale
 
 /**
  * Adam's learning memory — the store behind the hybrid brain.
@@ -136,25 +137,62 @@ object MemoryStore {
         return score(text, learned)
     }
 
-    /** Serializes a stored pattern to the same JSON the LLM would emit. */
-    fun toCommandJson(p: LearnedPattern): String {
-        val sb = StringBuilder()
-        sb.append("{\"action\":\"").append(p.action)
-        sb.append("\",\"target\":\"").append(esc(p.target)).append("\",\"params\":{")
-        p.params.entries.forEachIndexed { i, (k, v) ->
-            if (i > 0) sb.append(',')
-            sb.append('"').append(esc(k)).append("\":\"").append(esc(v)).append('"')
+    private val sensitiveActions = setOf(
+        "SEND_MESSAGE", "MAKE_CALL", "SEND_EMAIL", "NOTE", "TYPE"
+    )
+    private val sensitiveParams = setOf(
+        "body", "phone", "subject", "message", "pendinglearn"
+    )
+
+    fun isSensitiveAction(action: String): Boolean =
+        action.trim().uppercase(Locale.ROOT) in sensitiveActions
+
+    /**
+     * Learned patterns teach actions, never fixed sensitive arguments. A
+     * message pattern must not replay yesterday's recipient or body.
+     */
+    fun withoutSensitiveArgs(pattern: LearnedPattern): LearnedPattern {
+        if (!isSensitiveAction(pattern.action)) return pattern
+        val safeParams = pattern.params.filterKeys {
+            it.lowercase(Locale.ROOT) !in sensitiveParams
         }
-        sb.append("}}")
-        return sb.toString()
+        return pattern.copy(target = "", params = safeParams)
+    }
+
+    /** Serializes a stored pattern through the JSON library (not string joins). */
+    fun toCommandJson(p: LearnedPattern): String {
+        val params = JSONObject()
+        p.params.forEach { (k, v) -> params.put(k, v) }
+        return JSONObject()
+            .put("action", p.action)
+            .put("target", p.target)
+            .put("params", params)
+            .toString()
     }
 
     /** Stores a newly reasoned pattern (dedupes by keyword set). */
     @Synchronized
     fun addLearned(context: Context, pattern: LearnedPattern) {
         ensureLoaded(context)
-        learned.removeAll { it.keywords.toSet() == pattern.keywords.toSet() }
-        learned += pattern.copy(example = redact(pattern.example))
+        val safe = withoutSensitiveArgs(pattern)
+        learned.removeAll { it.keywords.toSet() == safe.keywords.toSet() }
+        learned += safe.copy(example = redact(safe.example))
+        persist(context)
+    }
+
+    /** Deletes one learned pattern; returns true when something was removed. */
+    @Synchronized
+    fun removeLearned(context: Context, pattern: LearnedPattern): Boolean {
+        ensureLoaded(context)
+        val removed = learned.removeAll { it.keywords.toSet() == pattern.keywords.toSet() }
+        if (removed) persist(context)
+        return removed
+    }
+
+    @Synchronized
+    fun clearLearned(context: Context) {
+        ensureLoaded(context)
+        learned.clear()
         persist(context)
     }
 
@@ -175,9 +213,6 @@ object MemoryStore {
         ensureLoaded(context)
         return novel.toList()
     }
-
-    private fun esc(s: String): String =
-        s.replace("\\", "\\\\").replace("\"", "\\\"")
 
     /**
      * Strips secrets before anything is persisted: email addresses and long

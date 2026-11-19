@@ -1,5 +1,6 @@
 package com.adam.assistant.core
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -17,6 +19,7 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.adam.assistant.R
 import com.adam.assistant.executor.CommandExecutor
+import com.adam.assistant.executor.CommandExecutorActionPort
 import com.adam.assistant.llm.LlmEngine
 import com.adam.assistant.llm.ModelDownloader
 import com.adam.assistant.stt.SttEngine
@@ -28,7 +31,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
@@ -46,11 +48,20 @@ class AssistantService : LifecycleService() {
         const val ACTION_START = "START"
         const val ACTION_STOP  = "STOP"
         const val ACTION_TOGGLE_LISTEN = "TOGGGLE_LISTEN"
+        const val ACTION_STOP_SPEAKING = "STOP_SPEAKING"
+        const val ACTION_CANCEL_COMMAND = "CANCEL_COMMAND"
         const val ACTION_SET_WAKE_WORD = "SET_WAKE_WORD"
+        const val ACTION_SET_LLM = "SET_LLM"
         const val EXTRA_WAKE_WORD_ENABLED = "wake_word_enabled"
+        const val EXTRA_LLM_ENABLED = "llm_enabled"
 
         private val _state = MutableStateFlow(State.IDLE)
         val state: StateFlow<State> = _state
+
+        // Service existence is independent from ready/listening state: IDLE
+        // while running means "awake but not listening", not "stopped".
+        private val _running = MutableStateFlow(false)
+        val running: StateFlow<Boolean> = _running
 
         private val _lastHeard = MutableStateFlow("")
         val lastHeard: StateFlow<String> = _lastHeard
@@ -77,13 +88,16 @@ class AssistantService : LifecycleService() {
     private lateinit var tts: TtsEngine
     private lateinit var llm: LlmEngine
     private lateinit var executor: CommandExecutor
+    private lateinit var coordinator: AssistantCoordinator
     private val audioCue = AudioCue()
 
     private var listenJob: Job? = null
     private var processJob: Job? = null
     private var wakeWordJob: Job? = null
     private var conversationJob: Job? = null
+    private var startupJob: Job? = null
     private var downloadObserveJob: Job? = null
+    private var started = false
 
     private var lastNotifText = ""
     private var lastNotifTime = 0L
@@ -98,10 +112,16 @@ class AssistantService : LifecycleService() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
                 ACTION_TOGGLE_LISTEN -> toggleListening()
+                ACTION_STOP_SPEAKING -> stopSpeaking()
+                ACTION_CANCEL_COMMAND -> cancelCurrentCommand()
                 ACTION_SET_WAKE_WORD -> {
                     val enabled = intent.getBooleanExtra(EXTRA_WAKE_WORD_ENABLED, true)
                     Preferences.setWakeWordEnabled(this@AssistantService, enabled)
                     applyWakeWordPreference()
+                }
+                ACTION_SET_LLM -> {
+                    val enabled = intent.getBooleanExtra(EXTRA_LLM_ENABLED, false)
+                    applyLlmPreference(enabled)
                 }
             }
         }
@@ -115,11 +135,32 @@ class AssistantService : LifecycleService() {
         tts = TtsEngine(this)
         llm = LlmEngine(this)
         executor = CommandExecutor(this)
+        val region = AssistantCore.deviceRegion()
+        coordinator = AssistantCoordinator(
+            router = CommandRouter { text ->
+                llm.processDetailed(text).also { routed ->
+                    Log.i(
+                        "Adam",
+                        "Engine: ${routed.source} conf=${"%.2f".format(routed.confidence)}"
+                    )
+                }
+            },
+            executor = CommandExecutorActionPort(executor),
+            policy = CommandPolicy(
+                capabilities = AndroidCapabilityRegistry(this),
+                phoneRegion = region
+            ),
+            contacts = AndroidContactDirectory(this),
+            phoneRegion = region
+        )
         audioCue.init()
         createNotificationChannel()
         val filter = IntentFilter().apply {
             addAction(ACTION_TOGGLE_LISTEN)
+            addAction(ACTION_STOP_SPEAKING)
+            addAction(ACTION_CANCEL_COMMAND)
             addAction(ACTION_SET_WAKE_WORD)
+            addAction(ACTION_SET_LLM)
         }
         // ContextCompat backports RECEIVER_NOT_EXPORTED to API < 33: the
         // framework 3-arg overload doesn't exist before Android 13 and used
@@ -135,16 +176,25 @@ class AssistantService : LifecycleService() {
             ACTION_START          -> start()
             ACTION_STOP           -> stop()
             ACTION_TOGGLE_LISTEN  -> toggleListening()
+            ACTION_STOP_SPEAKING  -> stopSpeaking()
+            ACTION_CANCEL_COMMAND -> cancelCurrentCommand()
             ACTION_SET_WAKE_WORD  -> {
                 val enabled = intent.getBooleanExtra(EXTRA_WAKE_WORD_ENABLED, true)
                 Preferences.setWakeWordEnabled(this, enabled)
                 applyWakeWordPreference()
+            }
+            ACTION_SET_LLM -> {
+                val enabled = intent.getBooleanExtra(EXTRA_LLM_ENABLED, false)
+                applyLlmPreference(enabled)
             }
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
+        started = false
+        _running.value = false
+        startupJob?.cancel(); startupJob = null
         cancelAllJobs()
         try { llm.downloader.cancel() } catch (_: Throwable) { }
         try { unregisterReceiver(receiver) } catch (_: Throwable) { }
@@ -166,15 +216,21 @@ class AssistantService : LifecycleService() {
 
 
     private fun start() {
+        // A second Start tap (or a re-delivered intent) must not re-run the
+        // installer or spawn a second wake loop.
+        if (started) return
         try {
             startForeground(NOTIF_ID, buildNotification("Adam is initialising"))
         } catch (t: Throwable) {
             Log.e("Adam", "startForeground failed", t)
+            _running.value = false
             _state.value = State.ERROR
             _voiceStatus.value = "Couldn't start background mode: ${t.message}"
             return
         }
-        lifecycleScope.launch {
+        started = true
+        _running.value = true
+        startupJob = lifecycleScope.launch {
             // Every init step below touches native code / network / TTS, any
             // of which can throw (including Errors like UnsatisfiedLinkError
             // or OutOfMemoryError). An uncaught throw in this coroutine used
@@ -213,16 +269,26 @@ class AssistantService : LifecycleService() {
                     goIdle("Speech model unavailable")
                     return@launch
                 }
-                updateNotification("Preparing AI model…")
-                try { sayStatus("Wake word ready. Downloading accurate speech model. This may take a while.") } catch (t: Throwable) {
+                try { sayStatus("Speech ready. Preparing command parser.") } catch (t: Throwable) {
                     Log.e("Adam", "Status announcement failed (non-fatal)", t)
                 }
-                try {
-                    llm.init()
-                } catch (t: Throwable) {
-                    Log.e("Adam", "LLM init crashed (contained, regex fallback active)", t)
+                if (Preferences.isLlmEnabled(this@AssistantService)) {
+                    updateNotification("Preparing optional AI model…")
+                    try { sayStatus("Downloading the optional AI model. This may take a while.") } catch (t: Throwable) {
+                        Log.e("Adam", "Status announcement failed (non-fatal)", t)
+                    }
+                    try {
+                        llm.init()
+                    } catch (t: Throwable) {
+                        Log.e("Adam", "LLM init crashed (contained, regex fallback active)", t)
+                    }
+                } else {
+                    updateNotification("Using built-in command parser")
+                    try { sayStatus("AI model is off. Using built-in commands.") } catch (t: Throwable) {
+                        Log.e("Adam", "Status announcement failed (non-fatal)", t)
+                    }
                 }
-                try { sayStatus("Setup complete. Say Hey Adam to talk to me.") } catch (t: Throwable) {
+                try { sayStatus("Setup complete. Tap Listen once to talk to me.") } catch (t: Throwable) {
                     Log.e("Adam", "Status announcement failed (non-fatal)", t)
                 }
                 applyWakeWordPreference()
@@ -258,11 +324,59 @@ class AssistantService : LifecycleService() {
     }
 
     private fun stop() {
+        started = false
+        _running.value = false
+        startupJob?.cancel(); startupJob = null
+        try { llm.downloader.cancel() } catch (_: Throwable) { }
         cancelAllJobs()
         clearFollowUps()
         _state.value = State.IDLE
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun stopSpeaking() {
+        try { tts.stop() } catch (_: Throwable) { }
+        audioCue.bargeIn()
+    }
+
+    private fun cancelCurrentCommand() {
+        coordinator.cancel()
+        processJob?.cancel(); processJob = null
+        listenJob?.cancel(); listenJob = null
+        conversationJob?.cancel(); conversationJob = null
+        wakeWordJob?.cancel(); wakeWordJob = null
+        try { tts.stop() } catch (_: Throwable) { }
+        audioCue.bargeIn()
+        _state.value = State.IDLE
+        _voiceStatus.value = "Cancelled."
+        updateNotification("Adam is ready")
+        if (Preferences.isWakeWordEnabled(this) && stt.isReady) startWakeWordMode()
+    }
+
+    private fun applyLlmPreference(enabled: Boolean) {
+        Preferences.setLlmEnabled(this, enabled)
+        lifecycleScope.launch {
+            try {
+                if (enabled) {
+                    _voiceStatus.value = "Loading optional AI model…"
+                    updateNotification("Loading optional AI model…")
+                    llm.init()
+                    _voiceStatus.value = if (llm.brain.isReady) {
+                        "Optional AI model ready."
+                    } else {
+                        "AI model unavailable — built-in parser stays active."
+                    }
+                } else {
+                    llm.release()
+                    _voiceStatus.value = "Optional AI model off."
+                }
+                updateNotification(_voiceStatus.value)
+            } catch (t: Throwable) {
+                Log.e("Adam", "LLM preference change failed", t)
+                _voiceStatus.value = "AI model change failed."
+            }
+        }
     }
 
     fun toggleListening() {
@@ -283,7 +397,14 @@ class AssistantService : LifecycleService() {
 
     private fun startOneShotListening() {
         if (!stt.isReady) {
-            lifecycleScope.launch { tts.speak("Speech model not found.") }
+            val busy = _state.value == State.INITIALISING ||
+                _state.value == State.DOWNLOADING
+            lifecycleScope.launch {
+                tts.speak(
+                    if (busy) "Still getting ready. Please try again in a moment."
+                    else "Speech model not found."
+                )
+            }
             return
         }
         listenJob?.cancel(); processJob?.cancel()
@@ -320,7 +441,7 @@ class AssistantService : LifecycleService() {
 
     private suspend fun handleOneShotResult(text: String) {
         _lastHeard.value = text
-        Log.i("Adam", "Heard (one-shot): \"$text\"")
+        Log.i("Adam", "Heard one-shot input (${text.length} chars)")
         if (text.isBlank()) {
             _state.value = State.SPEAKING
             _voiceStatus.value = "I didn't hear anything."
@@ -332,7 +453,7 @@ class AssistantService : LifecycleService() {
         _voiceStatus.value = "Working on it…"
         updateNotification("Working on it…")
         val response = processUtterance(text)
-        Log.i("Adam", "Response: \"$response\"")
+        Log.i("Adam", "Reply ready (${response.length} chars)")
         _state.value = State.SPEAKING
         _voiceStatus.value = response
         updateNotification("Speaking…")
@@ -343,156 +464,20 @@ class AssistantService : LifecycleService() {
     //
     // High-risk actions (message/call/email) never execute without a yes, and
     // clarification questions are answered by the next utterance — in both the
-    // conversation loop and the one-shot mic path below.
-
-    private val sessions = SessionManager()
+    // conversation loop and the one-shot mic path below. The coordinator owns
+    // that state; this service only feeds it text and speaks the reply.
 
     private fun clearFollowUps() {
-        sessions.clear()
+        coordinator.cancel()
     }
 
-    private fun needsConfirmation(cmd: AssistantCommand): Boolean =
-        cmd.action == AssistantCommand.Action.SEND_MESSAGE ||
-        cmd.action == AssistantCommand.Action.MAKE_CALL ||
-        cmd.action == AssistantCommand.Action.SEND_EMAIL
-
-    private fun confirmationPreview(cmd: AssistantCommand): String =
-        when (cmd.action) {
-            AssistantCommand.Action.SEND_MESSAGE -> {
-                val who = cmd.target.ifBlank { "them" }
-                val app = cmd.params["app"] ?: "WhatsApp"
-                "I'll text $who on $app: \"${cmd.params["body"] ?: ""}\". Say yes to send, or no to cancel."
-            }
-            AssistantCommand.Action.MAKE_CALL ->
-                "I'll call ${cmd.target.ifBlank { "them" }}. Say yes to call, or no to cancel."
-            AssistantCommand.Action.SEND_EMAIL ->
-                "I'll email ${cmd.target.ifBlank { "them" }}. Say yes to send, or no to cancel."
-            else -> "Say yes to proceed, or no to cancel."
-        }
-
-    private val yesExact = setOf(
-        "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "alright",
-        "confirm", "affirmative", "send", "call", "do", "go"
-    )
-    private val yesPhrases = setOf("do it", "send it", "go ahead", "please do", "yes please", "yeah sure")
-    private val cancelFirstWords = setOf(
-        "no", "nope", "nah", "cancel", "stop", "don't", "dont", "nevermind"
-    )
-
-    private fun firstWord(t: String) = t.split(Regex("\\s+")).firstOrNull() ?: ""
-
-    private fun isYes(t: String) =
-        t in yesExact || t in yesPhrases ||
-        t.startsWith("yes ") || t.startsWith("yeah ") ||
-        t.startsWith("okay ") || t.startsWith("sure ")
-
-    private fun isCancel(t: String, original: String) =
-        firstWord(t) in cancelFirstWords ||
-        "never mind" in t || "forget it" in t || isExitCommand(original)
-
-    /**
-     * Resolves one utterance to something to SAY: consumes pending
-     * confirmations/slot-fills first, otherwise parses fresh (possibly arming
-     * a follow-up). A high-risk action only executes after a yes.
-     */
     private suspend fun processUtterance(text: String): String {
-        val t = text.lowercase().trim()
-
-        sessions.active()?.let { s ->
-            when (s.kind) {
-                Session.CONFIRM -> {
-                    sessions.clear()
-                    val cmd = s.command!!
-                    if (isCancel(t, text)) {
-                        Log.i("Adam", "Confirmation cancelled.")
-                        return "Okay, cancelled."
-                    }
-                    if (isYes(t)) {
-                        Log.i("Adam", "Confirmation accepted.")
-                        return executor.execute(cmd)
-                    }
-                    // Not an answer — user moved on; treat it as a fresh command.
-                    Log.i("Adam", "Confirmation abandoned; treating as fresh command.")
-                }
-                Session.SLOT -> {
-                    sessions.clear()
-                    val cmd = s.command!!
-                    val field = s.field ?: "body"
-                    if (isCancel(t, text)) {
-                        Log.i("Adam", "Slot fill cancelled.")
-                        return "Okay, cancelled."
-                    }
-                    val filled = when (field) {
-                        "body" -> cmd.copy(params = cmd.params + ("body" to text.trim()))
-                        "target", "title" -> cmd.copy(target = text.trim())
-                        else -> cmd.copy(params = cmd.params + (field to text.trim()))
-                    }
-                    if (needsConfirmation(filled)) {
-                        sessions.begin(Session.CONFIRM, filled)
-                        return confirmationPreview(filled)
-                    }
-                    return executor.execute(filled)
-                }
-                Session.CONTACT -> {
-                    sessions.clear()
-                    if (isCancel(t, text)) {
-                        Log.i("Adam", "Contact ask cancelled.")
-                        return "Okay, cancelled."
-                    }
-                    val match = Contacts.bestMatch(s.entries, text)
-                    if (match == null) {
-                        return "I still couldn't match that name. Let's try again later."
-                    }
-                    val filled = attachContact(s.command!!, match)
-                    if (needsConfirmation(filled)) {
-                        sessions.begin(Session.CONFIRM, filled)
-                        return confirmationPreview(filled)
-                    }
-                    return executor.execute(filled)
-                }
-                else -> sessions.clear()
-            }
-        }
-
         // Bare wake words inside a conversation ("hey adam?") get an
         // acknowledgement instead of polluting the novelty log.
         if (stripWakeWords(text).isBlank() && containsWakeWord(text)) {
             return "Yes, I'm listening."
         }
-
-        val routed = llm.processDetailed(text)
-        Log.i("Adam", "Engine: ${routed.source} conf=${"%.2f".format(routed.confidence)}")
-        Log.i("Adam", "Command: ${routed.command}")
-        var cmd = routed.command
-
-        // Contact resolution: match message/call targets against the phone's
-        // real contacts (canonical name + number). Unmatched names trigger a
-        // contact-constrained re-listen instead of a blind guess.
-        if ((cmd.action == AssistantCommand.Action.SEND_MESSAGE ||
-                cmd.action == AssistantCommand.Action.MAKE_CALL) &&
-            cmd.target.isNotBlank() && hasContactsPermission()
-        ) {
-            val entries = withContext(Dispatchers.IO) { Contacts.load(this@AssistantService) }
-            val match = Contacts.bestMatch(entries, cmd.target)
-            if (match != null) {
-                Log.i("Adam", "Contact resolved: \"${cmd.target}\" → \"${match.name}\"")
-                cmd = attachContact(cmd, match)
-            } else if (entries.isNotEmpty()) {
-                sessions.begin(Session.CONTACT, cmd, entries = entries)
-                return "I couldn't find ${cmd.target} in your contacts. Who should I contact? Say the name."
-            }
-        }
-        if (cmd.status == AssistantCommand.PlanStatus.NEEDS_CLARIFICATION &&
-            cmd.missingFields.isNotEmpty()
-        ) {
-            sessions.begin(Session.SLOT, cmd, field = cmd.missingFields.first())
-            return cmd.question ?: "I need a bit more information."
-        }
-        if (needsConfirmation(cmd)) {
-            sessions.begin(Session.CONFIRM, cmd)
-            return confirmationPreview(cmd)
-        }
-        return executor.execute(cmd)
+        return coordinator.submitText(text, InputSource.VOICE, CommandMode.EXECUTE).speech
     }
 
     private fun startWakeWordMode() {
@@ -517,7 +502,7 @@ class AssistantService : LifecycleService() {
                             .collect { wakeText ->
                                 failures = 0
                                 _lastHeard.value = wakeText
-                                Log.i("Adam", "Wake word heard: \"$wakeText\"")
+                                Log.i("Adam", "Wake word detected")
                                 audioCue.wakeDetected()
                                 // Users speak in one breath ("hey adam what's 12 times 7"):
                                 // keep whatever came after the wake phrase as the first
@@ -555,13 +540,15 @@ class AssistantService : LifecycleService() {
         conversationJob = lifecycleScope.launch {
             var idleRounds = 0
             var pending: String? = firstUtterance.takeIf { it.isNotBlank() }
-            if (pending != null) Log.i("Adam", "Leading with: \"$pending\"")
+            if (pending != null) {
+                Log.i("Adam", "Leading with captured text (${pending.length} chars)")
+            }
             while (isActive) {
                 _state.value = State.CONVERSATION_LISTENING
                 _voiceStatus.value = "Listening… speak now."
                 updateNotification("Listening…")
 
-                val contactAsk = sessions.active()?.takeIf { it.kind == Session.CONTACT }
+                val contactAsk = coordinator.pendingContactCandidates()
                 val utterance = pending?.also { pending = null }
                     ?: listenForCommand(contactAsk)
 
@@ -576,7 +563,7 @@ class AssistantService : LifecycleService() {
                 }
                 idleRounds = 0
                 _lastHeard.value = utterance
-                Log.i("Adam", "Heard: \"$utterance\"")
+                Log.i("Adam", "Heard input (${utterance.length} chars)")
 
                 if (isExitCommand(utterance)) {
                     audioCue.commandHeard()
@@ -589,7 +576,7 @@ class AssistantService : LifecycleService() {
                 _voiceStatus.value = "Working on it…"
                 updateNotification("Working on it…")
                 val response = processUtterance(utterance)
-                Log.i("Adam", "Response: \"$response\"")
+                Log.i("Adam", "Reply ready (${response.length} chars)")
 
                 _state.value = State.CONVERSATION_SPEAKING
                 _voiceStatus.value = response
@@ -599,7 +586,7 @@ class AssistantService : LifecycleService() {
                     // Cut in with "hey adam …" mid-reply: handle the rest now
                     // instead of dropping it and listening again.
                     val remainder = stripWakeWords(interruption)
-                    Log.i("Adam", "Interrupted with: \"$remainder\"")
+                    Log.i("Adam", "Interrupted with captured text (${remainder.length} chars)")
                     if (remainder.isBlank() || isExitCommand(remainder) || remainder == "stop") {
                         audioCue.commandHeard()
                         break
@@ -629,8 +616,8 @@ class AssistantService : LifecycleService() {
      * (continuous speech deterministically produced silence). The Vosk /
      * contact-grammar paths stream finals and keep the original 15 s cap.
      */
-    private suspend fun listenForCommand(contactAsk: Session?): String {
-        if (contactAsk == null && stt.isAccurateReady) {
+    private suspend fun listenForCommand(contactAsk: List<ContactCandidate>): String {
+        if (contactAsk.isEmpty() && stt.isAccurateReady) {
             val samples = withTimeoutOrNull(20_000L) {
                 try {
                     stt.captureUtterance()
@@ -646,9 +633,9 @@ class AssistantService : LifecycleService() {
             return withTimeoutOrNull(90_000L) { stt.transcribeSamples(samples) } ?: ""
         }
         return withTimeoutOrNull(15_000L) {
-            val flow = if (contactAsk != null) {
+            val flow = if (contactAsk.isNotEmpty()) {
                 Log.i("Adam", "Listening with contact vocabulary…")
-                stt.listenWithGrammar(Contacts.grammarJson(contactAsk.entries))
+                stt.listenWithGrammar(Contacts.grammarJson(contactAsk))
             } else {
                 stt.listen()
             }
@@ -657,18 +644,6 @@ class AssistantService : LifecycleService() {
                 .first { it.isFinal }
                 ?.text
         } ?: ""
-    }
-
-    /** Cuts the wake phrase off ("hey adam what's 12+7" → "what's 12+7"). */
-    private fun hasContactsPermission(): Boolean =
-        checkSelfPermission(android.Manifest.permission.READ_CONTACTS) ==
-            PackageManager.PERMISSION_GRANTED
-
-    /** Rewrites a command onto the canonical contact (name + number). */
-    private fun attachContact(cmd: AssistantCommand, match: Contacts.Entry): AssistantCommand {
-        val params = cmd.params.toMutableMap()
-        if (!match.phone.isNullOrBlank()) params["phone"] = match.phone
-        return cmd.copy(target = match.name, params = params)
     }
 
     private fun containsWakeWord(text: String): Boolean {
@@ -806,6 +781,12 @@ class AssistantService : LifecycleService() {
     }
 
     private fun updateNotification(text: String) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
         // The download path reports every 64 KB chunk; without coalescing the
         // system sheds our updates ("rate limit exceeded" spam) and burns battery.
         if (text == lastNotifText) return

@@ -6,6 +6,7 @@ plugins {
 android {
     namespace = "com.adam.assistant"
     compileSdk = 34
+    ndkVersion = "25.1.8937393"
 
     defaultConfig {
         applicationId = "com.adam.assistant"
@@ -15,6 +16,20 @@ android {
         versionName = "1.0"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         externalNativeBuild { cmake { cppFlags += "-std=c++17" } }
+    }
+
+    flavorDimensions += "distribution"
+    productFlavors {
+        // Strict offline build: no INTERNET permission, no download paths.
+        create("offline") {
+            dimension = "distribution"
+            buildConfigField("boolean", "OFFLINE_BUILD", "true")
+        }
+        // Default build: provisioning downloads allowed.
+        create("online") {
+            dimension = "distribution"
+            buildConfigField("boolean", "OFFLINE_BUILD", "false")
+        }
     }
 
     buildTypes {
@@ -30,7 +45,10 @@ android {
     }
     kotlinOptions { jvmTarget = "11" }
 
-    buildFeatures { viewBinding = true }
+    buildFeatures {
+        viewBinding = true
+        buildConfig = true
+    }
 
     testOptions {
         unitTests.isReturnDefaultValues = true

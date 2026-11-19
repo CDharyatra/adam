@@ -16,7 +16,7 @@ data class Session(
     /** Slot field awaiting a value (kind == "slot"). */
     val field: String? = null,
     /** Contact candidates (kind == "contact"). */
-    val entries: List<Contacts.Entry> = emptyList(),
+    val entries: List<ContactCandidate> = emptyList(),
     val expiresAt: Long = 0L
 ) {
     companion object {
@@ -36,7 +36,7 @@ class SessionManager(
         kind: String,
         command: AssistantCommand,
         field: String? = null,
-        entries: List<Contacts.Entry> = emptyList()
+        entries: List<ContactCandidate> = emptyList()
     ) {
         session = Session(
             kind = kind,

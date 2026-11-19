@@ -1,6 +1,8 @@
 package com.adam.assistant.stt
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -128,6 +130,12 @@ class SttEngine(private val context: Context) {
      * Returns 16 kHz mono floats in [-1, 1]. Empty when nothing heard.
      */
     private suspend fun recordUtterance(): FloatArray = withContext(Dispatchers.IO) {
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            throw SecurityException("RECORD_AUDIO permission not granted")
+        }
+
         val bufferSize = AudioRecord.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_IN_MONO,
@@ -257,6 +265,11 @@ class SttEngine(private val context: Context) {
         shouldContinue: () -> Boolean,
         onChunk: (ByteArray, Int) -> Unit
     ) {
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            throw SecurityException("RECORD_AUDIO permission not granted")
+        }
         val bufferSize = AudioRecord.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_IN_MONO,
